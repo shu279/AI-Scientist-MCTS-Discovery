@@ -10,25 +10,22 @@ from ai_scientist.utils.token_tracker import track_token_usage
 
 MAX_NUM_TOKENS = 4096
 
+
+def completion_token_kwargs(model: str, max_tokens: int = MAX_NUM_TOKENS) -> dict[str, int]:
+    if model.startswith("gpt-5"):
+        return {"max_completion_tokens": max_tokens}
+    return {"max_tokens": max_tokens}
+
+
+def sampling_kwargs(model: str, temperature: float) -> dict[str, float]:
+    if model.startswith("gpt-5"):
+        return {}
+    return {"temperature": temperature}
+
+# Updated
 AVAILABLE_VLMS = [
-    "gpt-4o-2024-05-13",
-    "gpt-4o-2024-08-06",
-    "gpt-4o-2024-11-20",
-    "gpt-4o-mini-2024-07-18",
-    "o3-mini",
-
-    # Ollama models
-
-    # llama4
-    "ollama/llama4:16x17b",
-
-    # mistral
-    "ollama/mistral-small3.2:24b",
-
-    # qwen
-    "ollama/qwen2.5vl:32b",
-
-    "ollama/z-uo/qwen2.5vl_tools:32b",
+    "gpt-5.4",
+    "gpt-5.5",
 ]
 
 
@@ -59,7 +56,7 @@ def make_llm_call(client, model, temperature, system_message, prompt):
                 *prompt,
             ],
             temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            **completion_token_kwargs(model),
             n=1,
             stop=None,
             seed=0,
@@ -71,8 +68,8 @@ def make_llm_call(client, model, temperature, system_message, prompt):
                 {"role": "system", "content": system_message},
                 *prompt,
             ],
-            temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            **sampling_kwargs(model, temperature),
+            **completion_token_kwargs(model),
             n=1,
             stop=None,
             seed=0,
@@ -102,7 +99,7 @@ def make_vlm_call(client, model, temperature, system_message, prompt):
                 *prompt,
             ],
             temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            **completion_token_kwargs(model),
         )
     elif "gpt" in model:
         return client.chat.completions.create(
@@ -111,8 +108,8 @@ def make_vlm_call(client, model, temperature, system_message, prompt):
                 {"role": "system", "content": system_message},
                 *prompt,
             ],
-            temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            **sampling_kwargs(model, temperature),
+            **completion_token_kwargs(model),
         )
     else:
         raise ValueError(f"Model {model} not supported.")
@@ -194,12 +191,10 @@ def get_response_from_vlm(
 
 def create_client(model: str) -> tuple[Any, str]:
     """Create client for vision-language model."""
+    # Updated
     if model in [
-        "gpt-4o-2024-05-13",
-        "gpt-4o-2024-08-06",
-        "gpt-4o-2024-11-20",
-        "gpt-4o-mini-2024-07-18",
-        "o3-mini",
+        "gpt-5.4",
+        "gpt-5.5",
     ]:
         print(f"Using OpenAI API with model {model}.")
         return openai.OpenAI(), model
@@ -321,8 +316,8 @@ def get_batch_responses_from_vlm(
                     {"role": "system", "content": system_message},
                     *new_msg_history,
                 ],
-                temperature=temperature,
-                max_tokens=MAX_NUM_TOKENS,
+                **sampling_kwargs(model, temperature),
+                **completion_token_kwargs(model),
                 n=n_responses,
                 seed=0,
             )

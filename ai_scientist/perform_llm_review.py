@@ -61,6 +61,56 @@ For the "Decision" field, don't use Weak Accept, Borderline Accept, Borderline R
 This JSON will be automatically parsed, so ensure the format is precise.
 """
 
+#Added for MCTS
+mcts_discovery_reviewer_addendum = """
+## Additional Review Criteria for MCTS Discovery Papers
+For papers about budget-efficient MCTS variants on the synthetic planning
+benchmark, explicitly audit the following points in the Summary, Strengths,
+Weaknesses, Soundness, and Contribution assessment.
+
+### Validity
+- The paper must introduce a named MCTS mechanism, not just a tuned constant or
+  an unlabeled heuristic.
+- The mechanism must include a clear formula, rule, or pseudocode.
+- The paper must state which MCTS component is changed: selection, rollout,
+  backup, expansion, action choice, or simulation allocation.
+- Changing only the UCT exploration constant is not a valid contribution.
+
+### Integrity
+- The vanilla UCT/MCTS implementation must remain a separate baseline.
+- The proposed method must be implemented as a separate proposed_mcts variant
+  or through proposed-only components.
+- The paper should make clear that random, greedy, beam-search, and vanilla
+  UCT/MCTS baselines are compared without changing their intended behavior.
+- Changing environments, environment constants, random seeds, metrics,
+  evaluation counts, or simulation budgets to make the proposed method look
+  better is a serious soundness flaw.
+
+### Evaluation
+- The evaluation should cover all three benchmark families when available:
+  grid reward collection, graph orienteering/routing, and deadline-based task
+  scheduling.
+- The proposed method and all baselines should be compared under the same fixed
+  per-decision simulation budgets.
+- Strong papers should include budget-sensitivity curves, not only one budget.
+- If the proposed method changes multiple MCTS components, the paper should
+  include component ablations that isolate which component matters whenever the
+  experiment budget permits it.
+- Ablation comparisons should be matched by the same budget and the same
+  instances whenever scenario-level data is available. Comparing a proposed
+  method at one budget against an ablation at another budget is a soundness
+  flaw.
+
+### Metrics and claims
+- The review should check whether the paper reports planning metrics such as
+  mean score, regret, optimality gap where exact solvers are available, and
+  worst-case or robustness-sensitive performance.
+- Claims of broad improvement should be supported across multiple environments
+  and budgets.
+- If exact optimal scores are not available, the paper should clearly state what
+  the regret or gap is measured against.
+"""
+
 neurips_form = (
     """
 ## Review Form
@@ -118,6 +168,7 @@ In general, authors should be rewarded rather than punished for being up front a
   2: You are willing to defend your assessment, but it is quite likely that you did not understand the central parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked.
   1: Your assessment is an educated guess. The submission is not in your area or the submission was difficult to understand. Math/other details were not carefully checked.
 """
+    + mcts_discovery_reviewer_addendum
     + template_instructions
 )
 

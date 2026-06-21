@@ -11,10 +11,7 @@ def get_ai_client(model: str, **model_kwargs):
     Returns:
         An instance of the appropriate AI client.
     """
-    if "claude-" in model:
-        return backend_anthropic.get_ai_client(model=model, **model_kwargs)
-    else:
-        return backend_openai.get_ai_client(model=model, **model_kwargs)
+    return backend_openai.get_ai_client(model=model, **model_kwargs)
 
 def query(
     system_message: PromptType | None,
@@ -63,10 +60,13 @@ def query(
         model_kwargs["max_completion_tokens"] = 100000  # max_tokens
         # remove 'temperature' from model_kwargs
         model_kwargs.pop("temperature", None)
+    elif model.startswith("gpt-5"):
+        model_kwargs["max_completion_tokens"] = max_tokens
+        model_kwargs.pop("temperature", None)
     else:
         model_kwargs["max_tokens"] = max_tokens
 
-    query_func = backend_anthropic.query if "claude-" in model else backend_openai.query
+    query_func = backend_openai.query
     output, req_time, in_tok_count, out_tok_count, info = query_func(
         system_message=compile_prompt_to_md(system_message) if system_message else None,
         user_message=compile_prompt_to_md(user_message) if user_message else None,

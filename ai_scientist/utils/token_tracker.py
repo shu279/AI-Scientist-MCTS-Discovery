@@ -23,6 +23,16 @@ class TokenTracker:
         self.interactions = defaultdict(list)
 
         self.MODEL_PRICES = {
+            "gpt-5.4": {
+                "prompt": 2.50 / 1000000,
+                "cached": 0.25 / 1000000,
+                "completion": 15.00 / 1000000,
+            },
+            "gpt-5.5": {
+                "prompt": 5.00 / 1000000,
+                "cached": 0.50 / 1000000,
+                "completion": 30.00 / 1000000,
+            },
             "gpt-4o-2024-11-20": {
                 "prompt": 2.5 / 1000000,  # $2.50 per 1M tokens
                 "cached": 1.25 / 1000000,  # $1.25 per 1M tokens

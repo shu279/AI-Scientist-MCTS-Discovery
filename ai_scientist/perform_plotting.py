@@ -44,6 +44,8 @@ Implement best practices:
 - Make the plots look professional (if applicable, no top and right spines, dpi of 300, adequate ylim, etc.).
 - Do not use labels with underscores, e.g. "loss_vs_epoch" should be "loss vs epoch".
 - For image examples, select a few categories/classes to showcase the diversity of results instead of showing a single category/class. Some can be included in the main paper, while the rest can go in the appendix.
+- If the proposed MCTS method changes multiple components, include component ablation plots when the data is available.
+- Ablation plots must compare variants on the same budget and the same instances. Do not compare a proposed variant at one budget against an ablation or baseline at a different budget, and do not mix unmatched instance sets.
 
 Your output should be the entire Python aggregator script in triple backticks.
 """
@@ -65,6 +67,8 @@ IMPORTANT:
 - It should call os.makedirs("figures", exist_ok=True) before saving any plots.
 - Aim for a balance of empirical results, ablations, and diverse, informative visuals in 'figures/' that comprehensively showcase the finalized research outcomes.
 - If you need .npy paths from the summary, only copy those paths directly (rather than copying and parsing the entire summary).
+- If the proposed MCTS method changes multiple components, include component ablation plots when the data is available.
+- For every ablation or baseline-vs-proposed plot, compare rows matched by the same environment, instance_id, and per_decision_budget whenever scenario-level data is available. If only aggregate summaries are available, compare only matching environment and per_decision_budget groups and state that instance-level matching was unavailable in the plot title or caption text embedded in the figure.
 
 Your generated Python script must:
 1) Load or refer to relevant data and .npy files from these summaries. Use the full and exact file paths in the summary JSONs.
@@ -76,6 +80,7 @@ Your generated Python script must:
 7) Make sure that every plot is unique and not duplicated from the original plots. Delete any duplicate plots if necessary.
 8) Each figure can have up to 3 subplots using fig, ax = plt.subplots(1, 3).
 9) Use a font size larger than the default for plot labels and titles to ensure they are readable in the final PDF paper.
+10) For component ablations, prefer paired deltas or grouped bars/lines computed within the same budget and same instance before aggregating across seeds or instances.
 
 
 Below are the summaries in JSON:
@@ -134,7 +139,7 @@ def run_aggregator_script(
 
 
 def aggregate_plots(
-    base_folder: str, model: str = "o1-2024-12-17", n_reflections: int = 5
+    base_folder: str, model: str = "gpt-5.4", n_reflections: int = 5
 ) -> None:
     filename = "auto_plot_aggregator.py"
     aggregator_script_path = os.path.join(base_folder, filename)
@@ -213,6 +218,8 @@ Please criticize the current script for any flaws including but not limited to:
 - Can you aggregate multiple plots into one figure if suitable?
 - Do the labels have underscores? If so, replace them with spaces.
 - Make sure that every plot is unique and not duplicated from the original plots.
+- If the method changes multiple MCTS components, are component ablation plots included when data exists?
+- Are ablation and proposed-vs-baseline comparisons matched by the same budget and same instance before aggregation whenever scenario-level data exists?
 
 If you believe you are done, simply say: "I am done". Otherwise, please provide an updated aggregator script in triple backticks."""
 
@@ -265,8 +272,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="o1-2024-12-17",
-        help="LLM model to use (default: o1-2024-12-17).",
+        default="gpt-5.4",
+        help="LLM model to use.",
     )
     parser.add_argument(
         "--reflections",

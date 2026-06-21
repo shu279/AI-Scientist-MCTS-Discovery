@@ -140,31 +140,38 @@ class AgentManager:
         self.journals: Dict[str, Journal] = {}
         self.stage_history: List[StageTransition] = []
         self.completed_stages: List[str] = []
+
+        # Adapted stage names for MCTS experiment.
         self.main_stage_dict: Dict[int, str] = {
-            1: "initial_implementation",
-            2: "baseline_tuning",
-            3: "creative_research",
-            4: "ablation_studies",
+            1: "benchmark_verification",
+            2: "mcts_variant_generation",
+            3: "candidate_refinement",
+            4: "mcts_ablation_budget_analysis",
         }
+
+        # Changed stage goals for MCTS experiment.
         self.main_stage_goals: Dict[int, str] = {
             1: """
-                - Focus on getting basic working implementation
-                - Use a simple dataset
-                - Aim for basic functional correctness
-                - If you are given \"Code To Use\", you can directly use it as a starting point.""",
+                - Focus on getting the MCTS benchmark suite running end-to-end.
+                - Verify that random, greedy, beam search, vanilla UCT/MCTS, and fallback proposed_mcts all run on the environments.
+                - Aim for basic functional correctness.""",
             2: """
-                - Change hyperparameters such as learning rate, number of epochs, batch size, etc. to improve the performance
-                - DO NOT change the model architecture from the previous stage
-                - Introduce TWO more new datasets from HuggingFace test the model. Try very hard to think what Huggingface datasets can be used here for testing.""",
+                - Explore multiple named MCTS variant candidates by modifying proposed MCTS components only.
+                - Candidate variants should change at least one core MCTS mechanism such as selection, rollout, backup, expansion, action choice, or simulation allocation.
+                - Do not modify vanilla UCT/MCTS, random, greedy, or beam-search baselines.
+                - Do not change environment constants, scenario counts, random seeds, evaluation budgets, or metrics.
+                - Changing only the vanilla UCT exploration constant is not a valid contribution.""",
             3: """
-                - Explore novel improvements
-                - Come up with experiments to reveal new insights
-                - Be creative and think outside the box
-                - MAKE SURE you use THREE HuggingFace dataset in total to test your models""",
+                - Select the most promising named MCTS variant and refine it across all environments and fixed per-decision budgets.
+                - The refined method should have a clear rule, formula, or pseudocode.
+                - If no candidate improves over vanilla UCT/MCTS on at least TWO environments, diagnose the failure and replace it with a new named MCTS mechanism.
+                - Preserve vanilla UCT/MCTS as the main baseline for fair comparison.""",
             4: """
-                - Conduct systematic component analysis that reveals the contribution of each part
-                - Use the same datasets you used from the previous stage""",
+                - Conduct systematic ablations and budget-sensitivity analysis for the final MCTS variant.
+                - Identify which component contributes to the result: selection, rollout, backup, expansion, action choice, or simulation allocation.
+                - Compare against vanilla UCT/MCTS, random, greedy, and beam search.""",
         }
+
         # Create initial stage
         self._create_initial_stage()
 
@@ -201,8 +208,8 @@ Your research idea:\n\n
         """Create the initial stage configuration"""
         self.current_stage_number += 1
         initial_stage = Stage(
-            name="1_initial_implementation_1_preliminary",
-            description="preliminary",
+            name="1_benchmark_verification_1_first_attempt",
+            description="first_attempt",
             goals=self.main_stage_goals[1],
             max_iterations=self._get_max_iterations(self.current_stage_number),
             num_drafts=self.cfg.agent.search.num_drafts,
@@ -343,58 +350,7 @@ Your research idea:\n\n
     def _check_substage_completion(
         self, current_substage: Stage, journal: Journal
     ) -> bool:
-        """Check if the current sub-stage is complete"""
-        best_node = journal.get_best_node(cfg=self.cfg)
-        if not best_node:
-            return False, "No best node found"
-
-        vlm_feedback = self._parse_vlm_feedback(best_node)
-        eval_prompt = f"""
-        Evaluate if the current sub-stage is complete based on the following evidence:
-        1. Figure Analysis:
-        {vlm_feedback}
-
-        Requirements for completion:
-        - {current_substage.goals}
-
-        Provide a detailed evaluation of completion status.
-        """
-
-        try:
-            evaluation = query(
-                system_message=eval_prompt,
-                user_message=None,
-                func_spec=stage_completion_eval_spec,
-                model=self.cfg.agent.feedback.model,
-                temperature=self.cfg.agent.feedback.temp,
-            )
-            if evaluation["is_complete"]:
-                logger.info(
-                    f"Stage {current_substage.name} completed: {evaluation['reasoning']}"
-                )
-                print(
-                    f"[green]Stage {current_substage.name} completed: {evaluation['reasoning']}[/green]"
-                )
-                return True, "Found working implementation"
-            else:
-                missing = ", ".join(evaluation["missing_criteria"])
-                logger.info(
-                    f"Stage {current_substage.name} not complete. Missing: {missing}"
-                )
-                print(
-                    f"[yellow]Stage {current_substage.name} not complete. Missing: {missing}[/yellow]"
-                )
-                return False, "Missing criteria: " + missing
-        except Exception as e:
-            logger.error(
-                f"Error in sub-stage {current_substage.name} completion evaluation: {e}"
-            )
-            return (
-                False,
-                f"Error in sub-stage {current_substage.name} completion evaluation",
-            )
-
-        # Terminate if max iterations reached
+        """Check if the current sub-stage is complete."""
         if len(journal.nodes) >= current_substage.max_iterations:
             logger.info(
                 f"Stage {current_substage.name} completed: reached max iterations"
@@ -405,10 +361,11 @@ Your research idea:\n\n
             return True, "Reached max iterations"
 
         print(f"[green]Stage {current_substage.name} not completed[/green]")
-        return False
+        return False, "stage not completed"
 
     def _check_stage_completion(self, stage: Stage) -> bool:
         """Check if current stage is complete based on criteria"""
+        main_stage, _, _, _ = self.parse_stage_names(stage.name)
         journal = self.journals[stage.name]
         # Terminate if max iterations reached
         if len(journal.nodes) >= stage.max_iterations:
@@ -416,7 +373,7 @@ Your research idea:\n\n
             print(
                 f"[green]Stage {stage.name} completed: reached max iterations[/green]"
             )
-            if stage.stage_number == 1:
+            if main_stage == 1: #Use main stage number for completion criteria
                 # For initial stage, if it didn't even find a working implementation until max iterations,
                 # end gracefully and stop the experiment.
                 logger.error(
@@ -427,11 +384,10 @@ Your research idea:\n\n
                 )
                 self.current_stage = None  # This will cause the run loop to exit
                 return True, "Failed to find working implementation"
-            else:
-                return True, "Reached max iterations"
+            return True, "Reached max iterations"
 
-        # For initial stage, complete when we have at least one working implementation
-        if stage.stage_number == 1:
+        # Stage 1 can finish early once the benchmark and baseline implementation runs.
+        if main_stage == 1:
             if len(journal.good_nodes) > 0:
                 logger.info(
                     f"Stage {stage.name} completed: found working implementation"
@@ -439,98 +395,9 @@ Your research idea:\n\n
                 print(
                     f"[green]Stage {stage.name} completed: found working implementation[/green]"
                 )
-                return True, "Found working implementation"
+                return True, "Found working benchmark implementation"
 
-        if stage.stage_number == 2:
-            best_node = journal.get_best_node(cfg=self.cfg)
-            if not best_node:
-                return False, "No best node found"
-            if best_node == journal.nodes[0]:
-                return (
-                    False,
-                    "No improvement found from the base node (which is the best node from the previous stage)",
-                )
-
-            # Normal stage 2 completion check
-            vlm_feedback = self._parse_vlm_feedback(best_node)
-            eval_prompt = f"""
-            Evaluate if stage 2 (baseline tuning) is complete based on the following evidence:
-
-            1. Figure Analysis:
-            {vlm_feedback}
-
-            2. Datasets Tested: {best_node.datasets_successfully_tested}
-
-            Requirements for completion:
-            1. Training curves should show stable convergence
-            2. Results should be tested on at least two datasets
-            3. No major instabilities or issues in the plots
-
-            Provide a detailed evaluation of completion status.
-            """
-
-            try:
-                evaluation = query(
-                    system_message=eval_prompt,
-                    user_message=None,
-                    func_spec=stage_completion_eval_spec,
-                    model=self.cfg.agent.feedback.model,
-                    temperature=self.cfg.agent.feedback.temp,
-                )
-
-                if evaluation["is_complete"]:
-                    logger.info(
-                        f"Stage {stage.name} completed: {evaluation['reasoning']}"
-                    )
-                    print(
-                        f"[green]Stage {stage.name} completed: {evaluation['reasoning']}[/green]"
-                    )
-                    return True, "Found working implementation"
-                else:
-                    missing = ", ".join(evaluation["missing_criteria"])
-                    logger.info(f"Stage {stage.name} not complete. Missing: {missing}")
-                    print(
-                        f"[yellow]Stage {stage.name} not complete. Missing: {missing}[/yellow]"
-                    )
-                    return False, "Missing criteria: " + missing
-            except Exception as e:
-                logger.error(f"Error in stage 2 completion evaluation: {e}")
-                return False, "Error in stage 2 completion evaluation"
-
-        if stage.stage_number == 3:
-            best_node = journal.get_best_node(cfg=self.cfg)
-            if not best_node:
-                return False, "No best node found"
-            if best_node == journal.nodes[0]:
-                return (
-                    False,
-                    "No improvement found from the base node (which is the best node from the previous stage)",
-                )
-            # Check if there are enough research results
-            # Or, we could just let the agent run until max iterations is reached
-            # Check if the experiment execution time is too short
-            exec_time_minutes = best_node.exec_time / 60
-            print(f"[cyan]exec_time_minutes: {exec_time_minutes}[/cyan]")
-            if len(self.journals[stage.name].nodes) > (
-                self.cfg.agent.stages.stage3_max_iters / 2
-            ):
-                if exec_time_minutes < self.cfg.exec.timeout / 60 / 2:
-                    exec_time_feedback = (
-                        f"Implementation works but runs too quickly ({exec_time_minutes:.2f} minutes)."
-                        "We have up to 60 minutes available for each experiment."
-                        "Make sure to scale up the experiment "
-                        "by increasing the number of epochs, using a larger model, or working with bigger datasets."
-                        "Given that the current execution time is {exec_time_minutes:.2f} minutes, think about how changing the number of epochs to run, or using a larger model, or working with bigger datasets to run"
-                        "will affect the execution time, and make sure to scale up the experiment accordingly."
-                    )
-                    print(f"[cyan]exec_time_feedback: {exec_time_feedback}[/cyan]")
-                    self.journals[stage.name].nodes[
-                        -1
-                    ].exec_time_feedback = exec_time_feedback
-                    return False, exec_time_feedback
-        if stage.stage_number == 4:
-            # Just let the agent run until max iterations is reached
-            pass
+        # Simplified Stage 2/3 completion checks
 
         print(f"[green]Stage {stage.name} not completed[/green]")
         return False, "stage not completed"
@@ -540,6 +407,7 @@ Your research idea:\n\n
         if stage_name not in self.journals:
             return None
         best_node = self.journals[stage_name].get_best_node(cfg=self.cfg)
+
         if best_node:
             # Create a clean copy of the node for the next stage
             copied_node = copy.deepcopy(best_node)
@@ -708,10 +576,10 @@ Your research idea:\n\n
                         print(f"[cyan]self.stage_history: {self.stage_history}[/cyan]")
                         prev_best = self._get_best_implementation(prev_stage)
                         if prev_best:
-                            self.journals[self.current_stage.name].append(prev_best)
+                            self.journals[current_substage.name].append(prev_best)
                         else:
                             print(
-                                f"[red]No previous best implementation found for {self.current_stage.name}. Something went wrong so finishing the experiment...[/red]"
+                                f"[red]No previous best implementation found for {current_substage.name}. Something went wrong so finishing the experiment...[/red]"
                             )
                             self.current_stage = None
                             current_substage = None
@@ -735,7 +603,10 @@ Your research idea:\n\n
                         )
                         if main_stage_complete:
                             # After main stage completion, run multi-seed eval on the best node
-                            if current_substage.stage_number in [1, 2, 3, 4]:
+                            current_main_stage = self.parse_stage_names(
+                                current_substage.name
+                            )[0]
+                            if current_main_stage in [1, 2, 3, 4]:
                                 best_node = self._get_best_implementation(
                                     current_substage.name
                                 )
@@ -835,9 +706,10 @@ Your research idea:\n\n
         is_initial_stage: bool,
     ) -> str:
         """Create detailed prompt to determine next stage configuration"""
+        stage_number = previous_stages[-1].stage_number
         prompt_parts = [
             f"Task Description: {self._curate_task_desc(previous_stages[-1])}",
-            f"Current Stage Number: {previous_stages[-1].stage_number}",
+            f"Current Stage Number: {stage_number}",
         ]
 
         if previous_stages:
@@ -1172,18 +1044,18 @@ Your research idea:\n\n
         {json.dumps(previous_results.get('progress', {}), indent=2)}
 
         Expected Stage Progression:
-        1. Initial Implementation: Focus on basic working implementation
-        2. Baseline Tuning: Systematic optimization of core parameters
-        3. Creative Research: Novel improvements and approaches
-        4. Ablation Studies: Systematic component analysis
+        1. Benchmark Verification: run the benchmark and unchanged baselines.
+        2. MCTS Variant Generation: generate named proposed MCTS candidates without modifying baselines.
+        3. Candidate Refinement: refine or replace the most promising candidate under fixed budgets.
+        4. Ablation and Budget Analysis: analyze proposed components and budget sensitivity.
 
         Consider factors like:
         - Progress toward stage goals
-        - Performance trends and stability
+        - Performance trends across environments and fixed per-decision budgets
         - Quality and reliability of results
-        - Understanding of the problem
+        - Whether unchanged vanilla UCT/MCTS remains a fair baseline
         - Presence of systematic issues
-        - Convergence indicators
+        - Whether Stage 2 candidates are named mechanisms rather than constant tuning
         - Readiness for next stage challenges
 
         Provide a holistic evaluation of whether the experiment should:

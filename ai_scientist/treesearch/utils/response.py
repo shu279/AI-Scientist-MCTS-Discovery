@@ -18,6 +18,16 @@ def is_valid_python_script(script):
         return False
 
 
+def normalize_python_code_block(code: str) -> str:
+    """Apply small, safe fixes to extracted Python code blocks."""
+    lines = []
+    for line in code.splitlines():
+        if line.strip() == "from __future__ import annotations":
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def extract_jsons(text):
     """Extract all JSON objects from the text. Caveat: This function cannot handle nested JSON objects."""
     json_objects = []
@@ -59,21 +69,25 @@ def extract_code(text):
     # When code is in a text or python block
     matches = re.findall(r"```(python)?\n*(.*?)\n*```", text, re.DOTALL)
     for match in matches:
-        code_block = match[1]
+        code_block = normalize_python_code_block(match[1])
         parsed_codes.append(code_block)
 
     # When the entire text is code or backticks of the code block is missing
     if len(parsed_codes) == 0:
         matches = re.findall(r"^(```(python)?)?\n?(.*?)\n?(```)?$", text, re.DOTALL)
         if matches:
-            code_block = matches[0][2]
+            code_block = normalize_python_code_block(matches[0][2])
             parsed_codes.append(code_block)
 
     # validate the parsed codes
     valid_code_blocks = [
         format_code(c) for c in parsed_codes if is_valid_python_script(c)
     ]
-    return format_code("\n\n".join(valid_code_blocks))
+    if valid_code_blocks:
+        return format_code("\n\n".join(valid_code_blocks))
+    if parsed_codes:
+        return format_code("\n\n".join(parsed_codes))
+    return ""
 
 
 def extract_text_up_to_code(s):

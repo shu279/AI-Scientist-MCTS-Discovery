@@ -129,6 +129,9 @@ def detect_references_position_clean(pdf_file):
     """
     if not osp.exists(pdf_file):
         return None
+    if shutil.which("pdftotext") is None:
+        print("pdftotext not found; skipping reference-position detection.")
+        return None
 
     # Compile a regex pattern to match "REFERENCES" even if there are extra spaces
     # between letters (and do a case-insensitive match).
@@ -191,6 +194,9 @@ def extract_page_line_counts(pdf_file, first_page, last_page):
     Pages for which extraction fails are omitted.
     """
     page_lines = {}
+    if shutil.which("pdftotext") is None:
+        print("pdftotext not found; skipping PDF line-count extraction.")
+        return page_lines
     for page in range(first_page, last_page + 1):
         temp_dir = tempfile.mkdtemp()
         page_txt = osp.join(temp_dir, f"page_{page}.txt")
@@ -332,6 +338,52 @@ def get_reflection_page_info(reflection_pdf, page_limit):
         )
 
     return reflection_page_info
+
+
+def collect_writeup_figures(base_folder):
+    figures_dir = osp.join(base_folder, "figures")
+    os.makedirs(figures_dir, exist_ok=True)
+
+    for root, _, files in os.walk(osp.join(base_folder, "logs", "0-run", "experiment_results")):
+        for fname in files:
+            if not fname.lower().endswith(".png"):
+                continue
+            src = osp.join(root, fname)
+            dst = osp.join(figures_dir, fname)
+            if not osp.exists(dst):
+                try:
+                    shutil.copy2(src, dst)
+                except OSError:
+                    pass
+
+    return figures_dir, sorted(
+        f for f in os.listdir(figures_dir) if f.lower().endswith(".png")
+    )
+
+
+def sanitize_latex_figure_references(latex_text, valid_figures):
+    valid = set(valid_figures)
+
+    def figure_is_valid(match):
+        refs = re.findall(
+            r"\\includegraphics(?:\[[^\]]*\])?{([^}]+)}", match.group(0)
+        )
+        return all(osp.basename(ref) in valid for ref in refs)
+
+    figure_pattern = re.compile(r"\\begin{figure}.*?\\end{figure}", re.DOTALL)
+    latex_text = figure_pattern.sub(
+        lambda match: match.group(0) if figure_is_valid(match) else "",
+        latex_text,
+    )
+
+    latex_text = re.sub(
+        r"\\includegraphics(?:\[[^\]]*\])?{([^}]+)}",
+        lambda match: match.group(0)
+        if osp.basename(match.group(1)) in valid
+        else "% Removed missing figure: " + match.group(1),
+        latex_text,
+    )
+    return latex_text
 
 
 def get_citation_addition(
@@ -742,7 +794,7 @@ def filter_experiment_summaries(exp_summaries, step_name):
     return filtered_summaries
 
 
-def gather_citations(base_folder, num_cite_rounds=20, small_model="gpt-4o-2024-05-13"):
+def gather_citations(base_folder, num_cite_rounds=20, small_model="gpt-5.4"):
     """
     Gather citations for a paper, with ability to resume from previous progress.
 
@@ -859,8 +911,8 @@ def perform_writeup(
     citations_text=None,
     no_writing=False,
     num_cite_rounds=20,
-    small_model="gpt-4o-2024-05-13",
-    big_model="o1-2024-12-17",
+    small_model="gpt-5.4",
+    big_model="gpt-5.4",
     n_writeup_reflections=3,
     page_limit=4,
 ):
@@ -897,13 +949,8 @@ def perform_writeup(
         with open(writeup_file, "r") as f:
             writeup_text = f.read()
 
-        # Gather plot filenames from figures/ folder
-        figures_dir = osp.join(base_folder, "figures")
-        plot_names = []
-        if osp.exists(figures_dir):
-            for fplot in os.listdir(figures_dir):
-                if fplot.lower().endswith(".png"):
-                    plot_names.append(fplot)
+        # Gather plot filenames, copying generated experiment plots into figures/.
+        figures_dir, plot_names = collect_writeup_figures(base_folder)
 
         # Load aggregator script to include in the prompt
         aggregator_path = osp.join(base_folder, "auto_plot_aggregator.py")
@@ -1006,8 +1053,14 @@ def perform_writeup(
         if not latex_code_match:
             return False
         updated_latex_code = latex_code_match.group(1).strip()
+        updated_latex_code = sanitize_latex_figure_references(
+            updated_latex_code, plot_names
+        )
         with open(writeup_file, "w") as f:
             f.write(updated_latex_code)
+
+        latest_pdf = pdf_file
+        compile_latex(latex_folder, latest_pdf)
 
         # Multiple reflection loops on the final LaTeX
         for i in range(n_writeup_reflections):
@@ -1030,6 +1083,8 @@ def perform_writeup(
             # Compile current version before reflection
             print(f"[green]Compiling PDF for reflection {i+1}...[/green]")
             compile_latex(latex_folder, reflection_pdf)
+            if osp.exists(reflection_pdf):
+                latest_pdf = reflection_pdf
 
             review_img_cap_ref = perform_imgs_cap_ref_review(
                 vlm_client, vlm_model, reflection_pdf
@@ -1107,11 +1162,16 @@ Ensure proper citation usage:
                     for bad_str, repl_str in cleanup_map.items():
                         final_text = final_text.replace(bad_str, repl_str)
                     final_text = re.sub(r"(\d+(?:\.\d+)?)%", r"\1\\%", final_text)
+                    final_text = sanitize_latex_figure_references(
+                        final_text, plot_names
+                    )
 
                     with open(writeup_file, "w") as fo:
                         fo.write(final_text)
 
                     compile_latex(latex_folder, reflection_pdf)
+                    if osp.exists(reflection_pdf):
+                        latest_pdf = reflection_pdf
                 else:
                     print(f"No changes in reflection step {i+1}.")
                     break
@@ -1174,17 +1234,25 @@ If you believe you are done with reflection, simply say: "I am done"."""
                     for bad_str, repl_str in cleanup_map.items():
                         final_text = final_text.replace(bad_str, repl_str)
                     final_text = re.sub(r"(\d+(?:\.\d+)?)%", r"\1\\%", final_text)
+                    final_text = sanitize_latex_figure_references(
+                        final_text, plot_names
+                    )
 
                     with open(writeup_file, "w") as fo:
                         fo.write(final_text)
 
                     compile_latex(latex_folder, reflection_pdf)
+                    if osp.exists(reflection_pdf):
+                        latest_pdf = reflection_pdf
                 else:
                     print(f"No changes in reflection step {i+1}.")
                     break
             else:
                 print(f"No valid LaTeX code block found in reflection step {i+1}.")
                 break
+
+        if n_writeup_reflections <= 0:
+            return osp.exists(latest_pdf)
 
         # Final reflection on page limit
         # Save PDF with reflection
@@ -1209,7 +1277,7 @@ USE MINIMAL EDITS TO OPTIMIZE THE PAGE LIMIT USAGE."""
         # Compile current version before reflection
         print(f"[green]Compiling PDF for reflection final page limit...[/green]")
 
-        print(f"reflection step {i+1}")
+        print("reflection final page-limit step")
 
         reflection_code_match = re.search(
             r"```latex(.*?)```", reflection_response, re.DOTALL
@@ -1226,15 +1294,22 @@ USE MINIMAL EDITS TO OPTIMIZE THE PAGE LIMIT USAGE."""
                 for bad_str, repl_str in cleanup_map.items():
                     final_text = final_text.replace(bad_str, repl_str)
                 final_text = re.sub(r"(\d+(?:\.\d+)?)%", r"\1\\%", final_text)
+                final_text = sanitize_latex_figure_references(
+                    final_text, plot_names
+                )
 
                 with open(writeup_file, "w") as fo:
                     fo.write(final_text)
 
                 compile_latex(latex_folder, reflection_pdf)
+                if osp.exists(reflection_pdf):
+                    latest_pdf = reflection_pdf
             else:
                 print(f"No changes in reflection page step.")
 
-        return osp.exists(reflection_pdf)
+        if latest_pdf != pdf_file and osp.exists(latest_pdf):
+            shutil.copy2(latest_pdf, pdf_file)
+        return osp.exists(pdf_file)
 
     except Exception:
         print("EXCEPTION in perform_writeup:")
@@ -1250,14 +1325,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        default="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        default="gpt-5.4", #Updated
         choices=AVAILABLE_LLMS,
         help="Model to use for citation collection (small model).",
     )
     parser.add_argument(
         "--big-model",
         type=str,
-        default="o1-2024-12-17",
+        default="gpt-5.4", #Updated
         choices=AVAILABLE_LLMS,
         help="Model to use for final writeup (big model).",
     )

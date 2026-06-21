@@ -18,10 +18,6 @@ from ai_scientist.llm import (
 
 from ai_scientist.tools.semantic_scholar import search_for_papers
 
-from ai_scientist.perform_vlm_review import generate_vlm_img_review
-from ai_scientist.vlm import create_client as create_vlm_client
-
-
 def remove_accents_and_clean(s):
     # print("Original:", s)
     # Normalize to separate accents
@@ -146,6 +142,55 @@ def detect_pages_before_impact(latex_folder, timeout=30):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def collect_writeup_figures(base_folder):
+    figures_dir = osp.join(base_folder, "figures")
+    os.makedirs(figures_dir, exist_ok=True)
+
+    experiment_results_dir = osp.join(
+        base_folder, "logs", "0-run", "experiment_results"
+    )
+    for root, _, files in os.walk(experiment_results_dir):
+        for fname in files:
+            if not fname.lower().endswith(".png"):
+                continue
+            src = osp.join(root, fname)
+            dst = osp.join(figures_dir, fname)
+            if not osp.exists(dst):
+                try:
+                    shutil.copy2(src, dst)
+                except OSError:
+                    pass
+
+    return figures_dir, sorted(
+        f for f in os.listdir(figures_dir) if f.lower().endswith(".png")
+    )
+
+
+def sanitize_latex_figure_references(latex_text, valid_figures):
+    valid = set(valid_figures)
+
+    def figure_is_valid(match):
+        refs = re.findall(
+            r"\\includegraphics(?:\[[^\]]*\])?{([^}]+)}", match.group(0)
+        )
+        return all(osp.basename(ref) in valid for ref in refs)
+
+    figure_pattern = re.compile(r"\\begin{figure}.*?\\end{figure}", re.DOTALL)
+    latex_text = figure_pattern.sub(
+        lambda match: match.group(0) if figure_is_valid(match) else "",
+        latex_text,
+    )
+
+    latex_text = re.sub(
+        r"\\includegraphics(?:\[[^\]]*\])?{([^}]+)}",
+        lambda match: match.group(0)
+        if osp.basename(match.group(1)) in valid
+        else "% Removed missing figure: " + match.group(1),
+        latex_text,
+    )
+    return latex_text
+
+
 def get_citation_addition(
     client, model, context, current_round, total_rounds, idea_text
 ):
@@ -236,7 +281,7 @@ This JSON will be automatically parsed, so ensure the format is precise."""
 
     try:
         text, msg_history = get_response_from_llm(
-            msg=citation_first_prompt_template.format(
+            prompt=citation_first_prompt_template.format(
                 current_round=current_round + 1,
                 total_rounds=total_rounds,
                 Idea=idea_text,
@@ -284,7 +329,7 @@ This JSON will be automatically parsed, so ensure the format is precise."""
 
     try:
         text, msg_history = get_response_from_llm(
-            msg=citation_second_prompt_template.format(
+            prompt=citation_second_prompt_template.format(
                 papers=papers_str,
                 current_round=current_round + 1,
                 total_rounds=total_rounds,
@@ -456,8 +501,8 @@ def perform_writeup(
     base_folder,
     no_writing=False,
     num_cite_rounds=20,
-    small_model="gpt-4o-2024-05-13",
-    big_model="o1-2024-12-17",
+    small_model="gpt-5.4",
+    big_model="gpt-5.5",
     n_writeup_reflections=3,
     page_limit=8,
 ):
@@ -518,13 +563,8 @@ def perform_writeup(
         with open(writeup_file, "r") as f:
             writeup_text = f.read()
 
-        # Gather plot filenames from figures/ folder
-        figures_dir = osp.join(base_folder, "figures")
-        plot_names = []
-        if osp.exists(figures_dir):
-            for fplot in os.listdir(figures_dir):
-                if fplot.lower().endswith(".png"):
-                    plot_names.append(fplot)
+        # Gather plot filenames, copying generated experiment plots into figures/.
+        figures_dir, plot_names = collect_writeup_figures(base_folder)
 
         # Load aggregator script to include in the prompt
         aggregator_path = osp.join(base_folder, "auto_plot_aggregator.py")
@@ -587,36 +627,12 @@ def perform_writeup(
                 print(traceback.format_exc())
                 continue
 
-        # Generate VLM-based descriptions but do not overwrite plot_names
-        try:
-            vlm_client, vlm_model = create_vlm_client(small_model)
-            desc_map = {}
-            for pf in plot_names:
-                ppath = osp.join(figures_dir, pf)
-                if not osp.exists(ppath):
-                    continue
-                img_dict = {
-                    "images": [ppath],
-                    "caption": "No direct caption",
-                }
-                review_data = generate_vlm_img_review(img_dict, vlm_model, vlm_client)
-                if review_data:
-                    desc_map[pf] = review_data.get(
-                        "Img_description", "No description found"
-                    )
-                else:
-                    desc_map[pf] = "No description found"
-
-            # Prepare a string listing all figure descriptions in order
-            plot_descriptions_list = []
-            for fname in plot_names:
-                desc_text = desc_map.get(fname, "No description found")
-                plot_descriptions_list.append(f"{fname}: {desc_text}")
-            plot_descriptions_str = "\n".join(plot_descriptions_list)
-        except Exception:
-            print("EXCEPTION in VLM figure description generation:")
-            print(traceback.format_exc())
-            plot_descriptions_str = "No descriptions available."
+        # Keep normal writeup lightweight: the filenames and aggregator code provide
+        # the plot semantics without requiring one VLM call per image.
+        plot_descriptions_str = "\n".join(
+            f"{fname}: Generated experiment plot available for inclusion."
+            for fname in plot_names
+        )
 
         # Construct final prompt for big model, placing the figure descriptions alongside the plot list
         big_model_system_message = writeup_system_message_template.format(
@@ -636,7 +652,7 @@ def perform_writeup(
         )
 
         response, msg_history = get_response_from_llm(
-            msg=combined_prompt,
+            prompt=combined_prompt,
             client=big_client,
             model=big_client_model,
             system_message=big_model_system_message,
@@ -647,8 +663,14 @@ def perform_writeup(
         if not latex_code_match:
             return False
         updated_latex_code = latex_code_match.group(1).strip()
+        updated_latex_code = sanitize_latex_figure_references(
+            updated_latex_code, plot_names
+        )
         with open(writeup_file, "w") as f:
             f.write(updated_latex_code)
+
+        latest_pdf = base_pdf_file + ".pdf"
+        compile_latex(latex_folder, latest_pdf)
 
         # Multiple reflection loops on the final LaTeX
         for i in range(n_writeup_reflections):
@@ -665,7 +687,10 @@ def perform_writeup(
             invalid_figs = used_figs - all_figs
 
             # Compile current version before reflection
-            compile_latex(latex_folder, base_pdf_file + f"_{compile_attempt}.pdf")
+            reflection_pdf = base_pdf_file + f"_{compile_attempt}.pdf"
+            compile_latex(latex_folder, reflection_pdf)
+            if osp.exists(reflection_pdf):
+                latest_pdf = reflection_pdf
             compile_attempt += 1
             print(f"Compiled {base_pdf_file}_{compile_attempt}.pdf")
 
@@ -707,7 +732,7 @@ If you believe you are done, simply say: "I am done".
 """
 
             reflection_response, msg_history = get_response_from_llm(
-                msg=reflection_prompt,
+                prompt=reflection_prompt,
                 client=big_client,
                 model=big_client_model,
                 system_message=big_model_system_message,
@@ -736,13 +761,17 @@ If you believe you are done, simply say: "I am done".
                     for bad_str, repl_str in cleanup_map.items():
                         final_text = final_text.replace(bad_str, repl_str)
                     final_text = re.sub(r"(\d+(?:\.\d+)?)%", r"\1\\%", final_text)
+                    final_text = sanitize_latex_figure_references(
+                        final_text, plot_names
+                    )
 
                     with open(writeup_file, "w") as fo:
                         fo.write(final_text)
 
-                    compile_latex(
-                        latex_folder, base_pdf_file + f"_{compile_attempt}.pdf"
-                    )
+                    reflection_pdf = base_pdf_file + f"_{compile_attempt}.pdf"
+                    compile_latex(latex_folder, reflection_pdf)
+                    if osp.exists(reflection_pdf):
+                        latest_pdf = reflection_pdf
                     compile_attempt += 1
                     print(f"Compiled {base_pdf_file}_{compile_attempt}.pdf")
                 else:
@@ -752,7 +781,10 @@ If you believe you are done, simply say: "I am done".
                 print(f"No valid LaTeX code block found in reflection step {i+1}.")
                 break
 
-        return osp.exists(base_pdf_file + f"_{compile_attempt-1}.pdf")
+        pdf_file = base_pdf_file + ".pdf"
+        if latest_pdf != pdf_file and osp.exists(latest_pdf):
+            shutil.copy2(latest_pdf, pdf_file)
+        return osp.exists(pdf_file)
 
     except Exception:
         print("EXCEPTION in perform_writeup:")
@@ -768,14 +800,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        default="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        default="gpt-5.4",
         choices=AVAILABLE_LLMS,
         help="Model to use for citation collection (small model).",
     )
     parser.add_argument(
         "--big-model",
         type=str,
-        default="o1-2024-12-17",
+        default="gpt-5.5",
         choices=AVAILABLE_LLMS,
         help="Model to use for final writeup (big model).",
     )

@@ -2,7 +2,6 @@ import os.path as osp
 import json
 import argparse
 import shutil
-import torch
 import os
 import re
 import sys
@@ -20,7 +19,6 @@ from ai_scientist.treesearch.bfts_utils import (
 from ai_scientist.perform_plotting import aggregate_plots
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_icbinb_writeup import (
-    perform_writeup as perform_icbinb_writeup,
     gather_citations,
 )
 from ai_scientist.perform_llm_review import perform_review, load_paper
@@ -42,16 +40,9 @@ def save_token_tracker(idea_dir):
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Run AI scientist experiments")
     parser.add_argument(
-        "--writeup-type",
-        type=str,
-        default="icbinb",
-        choices=["normal", "icbinb"],
-        help="Type of writeup to generate (normal=8 page, icbinb=4 page)",
-    )
-    parser.add_argument(
         "--load_ideas",
         type=str,
-        default="ideas/i_cant_believe_its_not_better.json",
+        default="ai_scientist/ideas/mcts_discovery.json",
         help="Path to a JSON file containing pregenerated ideas",
     )
     parser.add_argument(
@@ -66,15 +57,16 @@ def parse_arguments():
         help="Index of the idea to run",
     )
     parser.add_argument(
-        "--add_dataset_ref",
-        action="store_true",
-        help="If set, add a HF dataset reference to the idea",
-    )
-    parser.add_argument(
         "--writeup-retries",
         type=int,
         default=3,
         help="Number of writeup attempts to try",
+    )
+    parser.add_argument(
+        "--page-limit",
+        type=int,
+        default=8,
+        help="Maximum number of pages for the generated writeup",
     )
     parser.add_argument(
         "--attempt_id",
@@ -85,19 +77,19 @@ def parse_arguments():
     parser.add_argument(
         "--model_agg_plots",
         type=str,
-        default="o3-mini-2025-01-31",
+        default="gpt-5.4",
         help="Model to use for plot aggregation",
     )
     parser.add_argument(
         "--model_writeup",
         type=str,
-        default="o1-preview-2024-09-12",
+        default="gpt-5.5",
         help="Model to use for writeup",
     )
     parser.add_argument(
         "--model_citation",
         type=str,
-        default="gpt-4o-2024-11-20",
+        default="gpt-5.4",
         help="Model to use for citation gathering",
     )
     parser.add_argument(
@@ -109,13 +101,13 @@ def parse_arguments():
     parser.add_argument(
         "--model_writeup_small",
         type=str,
-        default="gpt-4o-2024-05-13",
+        default="gpt-5.4",
         help="Smaller model to use for writeup",
     )
     parser.add_argument(
         "--model_review",
         type=str,
-        default="gpt-4o-2024-11-20",
+        default="gpt-5.4",
         help="Model to use for review main text and captions",
     )
     parser.add_argument(
@@ -131,14 +123,11 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def get_available_gpus(gpu_ids=None):
-    if gpu_ids is not None:
-        return [int(gpu_id) for gpu_id in gpu_ids.split(",")]
-    return list(range(torch.cuda.device_count()))
-
-
 def find_pdf_path_for_review(idea_dir):
     pdf_files = [f for f in os.listdir(idea_dir) if f.endswith(".pdf")]
+    if not pdf_files:
+        return None
+    pdf_path = osp.join(idea_dir, pdf_files[0])
     reflection_pdfs = [f for f in pdf_files if "reflection" in f]
     if reflection_pdfs:
         # First check if there's a final version
@@ -184,10 +173,6 @@ if __name__ == "__main__":
     os.environ["AI_SCIENTIST_ROOT"] = os.path.dirname(os.path.abspath(__file__))
     print(f"Set AI_SCIENTIST_ROOT to {os.environ['AI_SCIENTIST_ROOT']}")
 
-    # Check available GPUs and adjust parallel processes if necessary
-    available_gpus = get_available_gpus()
-    print(f"Using GPUs: {available_gpus}")
-
     with open(args.load_ideas, "r") as f:
         ideas = json.load(f)
         print(f"Loaded {len(ideas)} pregenerated ideas from {args.load_ideas}")
@@ -216,26 +201,10 @@ if __name__ == "__main__":
 
     idea_to_markdown(ideas[args.idea_idx], idea_path_md, code_path)
 
-    dataset_ref_code = None
-    if args.add_dataset_ref:
-        dataset_ref_path = "hf_dataset_reference.py"
-        if os.path.exists(dataset_ref_path):
-            with open(dataset_ref_path, "r") as f:
-                dataset_ref_code = f.read()
-        else:
-            print(f"Warning: Dataset reference file {dataset_ref_path} not found")
-            dataset_ref_code = None
+    added_code = code
 
-    if dataset_ref_code is not None and code is not None:
-        added_code = dataset_ref_code + "\n" + code
-    elif dataset_ref_code is not None and code is None:
-        added_code = dataset_ref_code
-    elif dataset_ref_code is None and code is not None:
-        added_code = code
-    else:
-        added_code = None
-
-    print(added_code)
+    if added_code is not None:
+        print(f"Loaded additional code context ({len(added_code)} characters).")
 
     # Add code to idea json if it was loaded
     if added_code is not None:
@@ -247,6 +216,9 @@ if __name__ == "__main__":
         json.dump(ideas[args.idea_idx], f, indent=4)
 
     config_path = "bfts_config.yaml"
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
     idea_config_path = edit_bfts_config_file(
         config_path,
         idea_dir,
@@ -255,16 +227,18 @@ if __name__ == "__main__":
 
     perform_experiments_bfts(idea_config_path)
     experiment_results_dir = osp.join(idea_dir, "logs/0-run/experiment_results")
+    copied_results_dir = osp.join(idea_dir, "experiment_results")
     if os.path.exists(experiment_results_dir):
         shutil.copytree(
             experiment_results_dir,
-            osp.join(idea_dir, "experiment_results"),
+            copied_results_dir,
             dirs_exist_ok=True,
         )
 
     aggregate_plots(base_folder=idea_dir, model=args.model_agg_plots)
 
-    shutil.rmtree(osp.join(idea_dir, "experiment_results"))
+    if os.path.exists(copied_results_dir):
+        shutil.rmtree(copied_results_dir)
 
     save_token_tracker(idea_dir)
 
@@ -277,22 +251,13 @@ if __name__ == "__main__":
         )
         for attempt in range(args.writeup_retries):
             print(f"Writeup attempt {attempt+1} of {args.writeup_retries}")
-            if args.writeup_type == "normal":
-                writeup_success = perform_writeup(
-                    base_folder=idea_dir,
-                    small_model=args.model_writeup_small,
-                    big_model=args.model_writeup,
-                    page_limit=8,
-                    citations_text=citations_text,
-                )
-            else:
-                writeup_success = perform_icbinb_writeup(
-                    base_folder=idea_dir,
-                    small_model=args.model_writeup_small,
-                    big_model=args.model_writeup,
-                    page_limit=4,
-                    citations_text=citations_text,
-                )
+            writeup_success = perform_writeup(
+                base_folder=idea_dir,
+                small_model=args.model_writeup_small,
+                big_model=args.model_writeup,
+                page_limit=args.page_limit,
+                citations_text=citations_text,
+            )
             if writeup_success:
                 break
 
@@ -304,7 +269,7 @@ if __name__ == "__main__":
     if not args.skip_review and not args.skip_writeup:
         # Perform paper review if the paper exists
         pdf_path = find_pdf_path_for_review(idea_dir)
-        if os.path.exists(pdf_path):
+        if pdf_path and os.path.exists(pdf_path):
             print("Paper found at: ", pdf_path)
             paper_content = load_paper(pdf_path)
             client, client_model = create_client(args.model_review)
@@ -318,52 +283,29 @@ if __name__ == "__main__":
                 json.dump(review_img_cap_ref, f, indent=4)
             print("Paper review completed.")
 
-    print("Start cleaning up processes")
-    # Kill all mp and torch processes associated with this experiment
-    import psutil
-    import signal
+    print("Start cleaning up child processes")
+    try:
+        import psutil
+        import signal
+    except ImportError:
+        print("psutil is not installed; skipping child-process cleanup.")
+        sys.exit(0)
 
-    # Get the current process and all its children
     current_process = psutil.Process()
     children = current_process.children(recursive=True)
 
-    # First try graceful termination
     for child in children:
         try:
             child.send_signal(signal.SIGTERM)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-    # Wait briefly for processes to terminate
-    gone, alive = psutil.wait_procs(children, timeout=3)
+    _, alive = psutil.wait_procs(children, timeout=3)
 
-    # If any processes remain, force kill them
     for process in alive:
         try:
             process.kill()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-    # Additional cleanup: find any orphaned processes containing specific keywords
-    keywords = ["python", "torch", "mp", "bfts", "experiment"]
-    for proc in psutil.process_iter(["name", "cmdline"]):
-        try:
-            # Check both process name and command line arguments
-            cmdline = " ".join(proc.cmdline()).lower()
-            if any(keyword in cmdline for keyword in keywords):
-                proc.send_signal(signal.SIGTERM)
-                proc.wait(timeout=3)
-                if proc.is_running():
-                    proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
-            continue
-
-    # Finally, terminate the current process
-    # current_process.send_signal(signal.SIGTERM)
-    # try:
-    #     current_process.wait(timeout=3)
-    # except psutil.TimeoutExpired:
-    #     current_process.kill()
-
-    # exit the program
     sys.exit(0)

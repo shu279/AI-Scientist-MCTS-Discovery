@@ -149,7 +149,7 @@ metric_parse_spec = FunctionSpec(
                     "properties": {
                         "metric_name": {
                             "type": "string",
-                            "description": "Specify the metric name clearly. Avoid vague terms like 'train,' 'val,' or 'test.' Instead, use precise labels such as 'train accuracy,' 'validation loss,' or 'test F1 score,' etc.",
+                            "description": "Specify the metric name clearly. Prefer planning labels such as 'mean score,' 'regret to best observed,' 'optimality gap,' or 'improvement over vanilla UCT.'",
                         },
                         "lower_is_better": {
                             "type": "boolean",
@@ -166,7 +166,7 @@ metric_parse_spec = FunctionSpec(
                                 "properties": {
                                     "dataset_name": {
                                         "type": "string",
-                                        "description": "The name of the dataset. Never include 'train', 'val', or 'test' in the dataset name.",
+                                        "description": "The name of the planning environment or benchmark split. Never include train/val/test unless the experiment explicitly defines such splits.",
                                     },
                                     "final_value": {
                                         "type": "number",
@@ -244,7 +244,11 @@ class AblationIdea:
 
 
 class HyperparamTuningIdea:
-    """Hyperparameter tuning idea"""
+    """Stage 2 MCTS variant idea.
+
+    The class name is kept for compatibility with the existing tree-search
+    plumbing, which stores Stage 2 ideas in the hyperparam_name field.
+    """
 
     def __init__(self, name: str, description: str):
         self.name = name
@@ -272,123 +276,57 @@ class MinimalAgent:
 
     @property
     def _prompt_environment(self):
+        # Changed to MCTS packages
         pkgs = [
             "numpy",
             "pandas",
             "scikit-learn",
             "statsmodels",
-            "xgboost",
-            "lightGBM",
-            "torch",
-            "torchvision",
-            "torch-geometric",
-            "bayesian-optimization",
-            "timm",
-            "albumentations",
+            "matplotlib",
+            "networkx",
         ]
         random.shuffle(pkgs)
         pkg_str = ", ".join([f"`{p}`" for p in pkgs])
 
         env_prompt = {
-            "Installed Packages": f"Your solution can use any relevant machine learning packages such as: {pkg_str}. Feel free to use any other packages too (all packages are already installed!). For neural networks we suggest using PyTorch rather than TensorFlow."
+            "Installed Packages": f"Your solution can use planning and analysis packages such as: {pkg_str}. Prefer lightweight numpy-based implementations for MCTS experiments. Feel free to use other installed packages when appropriate."
         }
         return env_prompt
 
     @property
     def _prompt_impl_guideline(self):
+        #Adapted for MCTS
         impl_guideline = [
-            "CRITICAL GPU REQUIREMENTS - Your code MUST include ALL of these:",
-            "  - At the start of your code, add these lines to handle GPU/CPU:",
-            "    ```python",
-            "    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')",
-            "    print(f'Using device: {device}')",
-            "    ```",
-            "  - ALWAYS move models to device using the `.to(device)` method",
-            "  - ALWAYS move input tensors to device using the `.to(device)` method",
-            "  - ALWAYS move model related tensors to device using the `.to(device)` method",
-            "  - For optimizers, create them AFTER moving model to device",
-            "  - When using DataLoader, move batch tensors to device in training loop: `batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}`",
-            "CRITICAL MODEL INPUT GUIDELINES:",
-            "  - Always pay extra attention to the input to the model being properly normalized",
-            "  - This is extremely important because the input to the model's forward pass directly affects the output, and the loss function is computed based on the output",
+            "BENCHMARK REQUIREMENTS:",
+            "  - Use the provided MCTS benchmark as a lightweight planning experiment with the existing environments, baselines, and saved metrics.",
+            "  - Keep the synthetic environments fixed unless the research idea explicitly requires adding an analysis-only diagnostic.",
+            "  - Only modify proposed MCTS components or helper functions used only by proposed_mcts.",
+            "  - Do not modify random, greedy, beam-search, or vanilla UCT/MCTS baseline functions.",
+            "  - Do not change environment constants, random seeds, evaluation budgets, metrics, scenario counts, or environment difficulty.",
+
+            "CODE STRUCTURE REQUIREMENTS:",
+            "  - Do NOT put any execution code inside 'if __name__ == \"__main__\":' block.",
+            "  - All code should be at the global scope or in functions that are called from the global scope.",
+            "  - The script should execute immediately when run, without requiring any special entry point.",
+            "  - The code should start with:",
+            "    import os",
+            "    working_dir = os.path.join(os.getcwd(), 'working')",
+            "    os.makedirs(working_dir, exist_ok=True)",
+            f"  - Be aware of the running time of the code; it should complete within {humanize.naturaldelta(self.cfg.exec.timeout)}.",
+            '  - You can use the "./working" directory to store temporary files.',
+
+            "EVALUATION REQUIREMENTS:",
+            "  - Preserve the existing output structure and save experiment_data.npy in the working directory.",
+            "  - Print final summary metrics for each planner, environment, and fixed per-decision budget.",
+            "  - Include unchanged vanilla_uct_mcts and proposed_mcts in the same comparison table.",
+            "  - When available, report score, regret_to_best_observed, and optimality_gap.",
+            "  - Save enough data to support budget-sensitivity and per-environment plots.",
+            "  - Track and report the primary evaluation metric when applicable: " + str(self.evaluation_metrics),
         ]
-        if hasattr(self.cfg.experiment, "num_syn_datasets"):
-            num_syn_datasets = self.cfg.experiment.num_syn_datasets
-            if num_syn_datasets > 1:
-                impl_guideline.extend(
-                    [
-                        f"You MUST evaluate your solution on at least {num_syn_datasets} different synthetic datasets to ensure robustness:",
-                        "  - Use standard benchmark datasets when available",
-                        f"  - If using synthetic data, generate at least {num_syn_datasets} variants with different characteristics",
-                        "  - Report metrics separately for each dataset",
-                        "  - Compute and report the average metric across all datasets",
-                    ]
-                )
-        impl_guideline.extend(
-            [
-                "For generative modeling tasks, you must:",
-                "  - Generate a set of samples from your model",
-                "  - Compare these samples with ground truth data using appropriate visualizations",
-                "  - When saving plots, always use the 'working_dir' variable that will be defined at the start of the script",
-                "  - Make sure to give each figure a unique and appropriate name based on the dataset it represents, rather than reusing the same filename.",
-                "Important code structure requirements:",
-                "  - Do NOT put any execution code inside 'if __name__ == \"__main__\":' block",
-                "  - All code should be at the global scope or in functions that are called from the global scope",
-                "  - The script should execute immediately when run, without requiring any special entry point",
-                "The code should start with:",
-                "  import os",
-                "  working_dir = os.path.join(os.getcwd(), 'working')",
-                "  os.makedirs(working_dir, exist_ok=True)",
-                "The code should be a single-file python program that is self-contained and can be executed as-is.",
-                "No parts of the code should be skipped, don't terminate the code execution before finishing the script.",
-                "Your response should only contain a single code block.",
-                f"Be aware of the running time of the code, it should complete within {humanize.naturaldelta(self.cfg.exec.timeout)}.",
-                'You can also use the "./working" directory to store any temporary files that your code needs to create.',
-                "Data saving requirements:",
-                "- Save all plottable data (metrics, losses, predictions, etc.) as numpy arrays using np.save()",
-                "- Use the following naming convention for saved files:",
-                "  ```python",
-                "  # At the start of your code",
-                "  experiment_data = {",
-                "      'dataset_name_1': {",
-                "          'metrics': {'train': [], 'val': []},",
-                "          'losses': {'train': [], 'val': []},",
-                "          'predictions': [],",
-                "          'ground_truth': [],",
-                "          # Add other relevant data",
-                "      },",
-                "      # Add additional datasets as needed:",
-                "      'dataset_name_2': {",
-                "          'metrics': {'train': [], 'val': []},",
-                "          'losses': {'train': [], 'val': []},",
-                "          'predictions': [],",
-                "          'ground_truth': [],",
-                "          # Add other relevant data",
-                "      },",
-                "  }",
-                "  # During training/evaluation:",
-                "  experiment_data['dataset_name_1']['metrics']['train'].append(train_metric)",
-                "  ```",
-                "- Include timestamps or epochs with the saved metrics",
-                "- For large datasets, consider saving in chunks or using np.savez_compressed()",
-                "CRITICAL EVALUATION REQUIREMENTS - Your code MUST include ALL of these:",
-                "  1. Track and print validation loss at each epoch or at suitable intervals:",
-                "     ```python",
-                "     print(f'Epoch {{epoch}}: validation_loss = {{val_loss:.4f}}')",
-                "     ```",
-                "  2. Track and update ALL these additional metrics: "
-                + str(self.evaluation_metrics),
-                "  3. Update metrics at EACH epoch:",
-                "  4. Save ALL metrics at the end:",
-                "     ```python",
-                "     np.save(os.path.join(working_dir, 'experiment_data.npy'), experiment_data)",
-                "     ```",
-            ]
-        )
 
         if self.cfg.agent.k_fold_validation > 1:
             impl_guideline.append(
-                f"The evaluation should be based on {self.cfg.agent.k_fold_validation}-fold cross-validation but only if that's an appropriate evaluation for the task at hand."
+                f"If repeated evaluation is appropriate, use {self.cfg.agent.k_fold_validation} independent scenario seeds without changing the benchmark difficulty."
             )
 
         return {"Implementation guideline": impl_guideline}
@@ -431,7 +369,7 @@ class MinimalAgent:
         return {
             "Response format": (
                 "Your response should be a brief outline/sketch of your proposed solution in natural language (3-5 sentences), "
-                "followed by a single markdown code block (using the format ```python ... ```) which implements the full code including hyperparameter tuning. "
+                "followed by a single markdown code block (using the format ```python ... ```) which implements the full code including the named MCTS variant candidate. "
                 "There should be no additional headings or text in your response. Do not omit any part of the code, "
                 "Your generated code should be complete and executable."
                 "Make sure to write concise code."
@@ -455,7 +393,7 @@ class MinimalAgent:
             "Introduction": (
                 "You are an AI researcher who is looking to publish a paper that will contribute significantly to the field."
                 "Your first task is to write a python code to implement a solid baseline based on your research idea provided below, "
-                "from data preparation to model training, as well as evaluation and visualization. "
+                "from benchmark setup to planner evaluation and visualization."
                 "Focus on getting a simple but working implementation first, before any sophisticated improvements. "
                 "We will explore more advanced variations in later stages."
             ),
@@ -466,7 +404,7 @@ class MinimalAgent:
         prompt["Instructions"] |= self._prompt_resp_fmt
         prompt["Instructions"] |= {
             "Experiment design sketch guideline": [
-                "This first experiment design should be relatively simple, without extensive hyper-parameter optimization.",
+                "This first experiment design should be relatively simple, without extensive algorithmic tuning.",
                 "Take the Memory section into consideration when proposing the design. ",
                 "The solution sketch should be 6-10 sentences. ",
                 "Don't suggest to do EDA.",
@@ -557,10 +495,11 @@ class MinimalAgent:
     def _generate_hyperparam_tuning_node(
         self, parent_node: Node, hyperparam_idea: HyperparamTuningIdea
     ):
+        #Adapted for MCTS
         prompt: Any = {
             "Introduction": (
                 "You are an experienced AI researcher. You are provided with a previously developed "
-                "baseline implementation. Your task is to implement hyperparameter tuning for the following idea: "
+                "MCTS benchmark implementation. Your task is to implement and evaluate the following named MCTS variant candidate: "
                 + hyperparam_idea.name
                 + ". "
                 + hyperparam_idea.description
@@ -568,35 +507,24 @@ class MinimalAgent:
             "Base code you are working on": wrap_code(parent_node.code),
             "Instructions": {},
         }
+
+        # Adapted for MCTS
+        base_guideline = self._prompt_impl_guideline["Implementation guideline"]
         prompt["Instructions"] |= {
-            "Implementation guideline": [
-                "The code should be a single-file python program that is self-contained and can be executed as-is.",
-                "No parts of the code should be skipped, don't terminate the code execution before finishing the script.",
-                "Data saving requirements:",
-                "- Save all plottable data (metrics, losses, predictions, etc.) as numpy arrays using np.save()",
-                "- Use the following naming convention for saved files:",
-                "  ```python",
-                "  # At the start of your code",
-                "  experiment_data = {",
-                "      'hyperparam_tuning_type_1': {",
-                "          'dataset_name_1': {",
-                "              'metrics': {'train': [], 'val': []},",
-                "              'losses': {'train': [], 'val': []},",
-                "              'predictions': [],",
-                "              'ground_truth': [],",
-                "              # Add other relevant data",
-                "          },",
-                "          # Add additional datasets as needed:",
-                "      },",
-                "      # Add additional hyperparam tuning types as needed",
-                "  }",
-                "Make sure to use a filename 'experiment_data.npy' to save the data. Do not use any other filename.",
+            "Implementation guideline": base_guideline
+            + [
+                "MCTS VARIANT REQUIREMENTS:",
+                f"  - Implement and evaluate the named MCTS variant candidate: {hyperparam_idea.name}.",
+                "  - The variant should introduce a clear MCTS mechanism with a rule, formula, or pseudocode.",
+                "  - The implementation should modify only proposed_mcts components or helpers used only by proposed_mcts.",
+                "  - Compare the proposed variant against unchanged vanilla_uct_mcts, random, greedy, and beam-search baselines.",
             ]
         }
+
         prompt["Instructions"] |= self._prompt_hyperparam_tuning_resp_fmt
         plan, code = self.plan_and_code_query(prompt)
         return Node(
-            plan="Hyperparam tuning name: " + hyperparam_idea.name + ".\n" + plan,
+            plan="MCTS variant name: " + hyperparam_idea.name + ".\n" + plan,
             code=code,
             parent=parent_node,
             hyperparam_name=hyperparam_idea.name,
@@ -606,7 +534,7 @@ class MinimalAgent:
         prompt: Any = {
             "Introduction": (
                 "You are an experienced AI researcher. You are provided with a previously developed "
-                "baseline implementation. Your task is to implement the ablation study for the following idea: "
+                "MCTS variant implementation. Your task is to implement the ablation or budget-sensitivity study for the following idea: "
                 + ablation_idea.name
                 + ". "
                 + ablation_idea.description
@@ -614,38 +542,21 @@ class MinimalAgent:
             "Base code you are working on": wrap_code(parent_node.code),
             "Instructions": {},
         }
+
+        # Adapted for MCTS
+        base_guideline = self._prompt_impl_guideline["Implementation guideline"]
         prompt["Instructions"] |= {
-            "Implementation guideline": [
-                "The code should be a single-file python program that is self-contained and can be executed as-is.",
-                "No parts of the code should be skipped, don't terminate the code execution before finishing the script.",
-                "Data saving requirements:",
-                "- Save all plottable data (metrics, losses, predictions, etc.) as numpy arrays using np.save()",
-                "- Use the following naming convention for saved files:",
-                "  ```python",
-                "  # At the start of your code",
-                "  experiment_data = {",
-                "      'ablation_type_1': {",
-                "          'dataset_name_1': {",
-                "              'metrics': {'train': [], 'val': []},",
-                "              'losses': {'train': [], 'val': []},",
-                "              'predictions': [],",
-                "              'ground_truth': [],",
-                "              # Add other relevant data",
-                "          },",
-                "          # Add additional datasets as needed:",
-                "          'dataset_name_2': {",
-                "              'metrics': {'train': [], 'val': []},",
-                "              'losses': {'train': [], 'val': []},",
-                "              'predictions': [],",
-                "              'ground_truth': [],",
-                "              # Add other relevant data",
-                "          },",
-                "      },",
-                "      # Add additional ablation types as needed",
-                "  }",
-                "Make sure to use a filename 'experiment_data.npy' to save the data. Do not use any other filename.",
+            "Implementation guideline": base_guideline
+            + [
+                "ABLATION REQUIREMENTS:",
+                f"  - Implement the ablation or budget-sensitivity study: {ablation_idea.name}.",
+                "  - The ablation should isolate one proposed_mcts component when possible, such as selection, rollout, backup, expansion, action choice, or simulation allocation.",
+                "  - Do not introduce a new unrelated MCTS method during the ablation stage.",
+                "  - Compare unchanged vanilla_uct_mcts, the original proposed_mcts, and the ablated variant when feasible.",
+                "  - Report whether the proposed improvement is robust across environments and fixed per-decision budgets.",
             ]
         }
+
         prompt["Instructions"] |= self._prompt_ablation_resp_fmt
         plan, code = self.plan_and_code_query(prompt)
         return Node(
@@ -725,6 +636,8 @@ class MinimalAgent:
             "AVAILABLE DATA: ",
             "Experiment Data: experiment_data.npy",
         ]
+
+        # Adapted for MCTS
         prompt_guideline += [
             "REQUIREMENTS: ",
             "The code should start with:",
@@ -732,18 +645,18 @@ class MinimalAgent:
             "  import numpy as np",
             "  import os",
             "  working_dir = os.path.join(os.getcwd(), 'working')",
-            "Create standard visualizations of experiment results",
+            "Create standard visualizations of MCTS planning experiment results",
             "Save all plots to working_dir",
-            "Include training/validation curves if available",
+            "Include budget-sensitivity curves, environment-wise planner comparisons, and ablation comparisons if available",
             "ONLY plot data that exists in experiment_data.npy - DO NOT make up or simulate any values",
             "Use basic matplotlib without custom styles",
             "Each plot should be in a separate try-except block",
             "Always close figures after saving",
-            "Always include a title for each plot, and be sure to use clear subtitles—such as 'Left: Ground Truth, Right: Generated Samples'—while also specifying the type of dataset being used.",
-            "Make sure to use descriptive names for figures when saving e.g. always include the dataset name and the type of plot in the name",
-            "When there are many similar figures to plot (e.g. generated samples at each epoch), make sure to plot only at a suitable interval of epochs so that you only plot at most 5 figures.",
+            "Always include a title for each plot and label the planner, environment, and per-decision budget clearly.",
+            "Make sure to use descriptive names for figures when saving, e.g. include the environment name, planner comparison, budget curve, or ablation name.",
+            "When there are many similar plots, keep only the most informative aggregate comparisons.",
             "Use the following experiment code to infer the data to plot: " + node.code,
-            "Example to extract data from experiment_data: experiment_data['dataset_name_1']['metrics']['train']",
+            "Example data may contain keys such as planner, environment, per_decision_budget, score, regret_to_best_observed, and optimality_gap.",
         ]
         prompt_guideline += [
             "Example data loading and plot saving code: ",
@@ -795,9 +708,9 @@ class MinimalAgent:
                     "Base plotting code: " + plot_code_from_prev_stage,
                     "Modify the base plotting code to:",
                     "1. Keep the same numpy data structure and plotting style",
-                    "2. Add comparison plots between different datasets",
-                    "3. Add dataset-specific visualizations if needed",
-                    "4. Include clear labels indicating which plots are from which dataset",
+                    "2. Add comparison plots between vanilla_uct_mcts and proposed_mcts",
+                    "3. Add environment-specific and budget-specific visualizations if needed",
+                    "4. Include clear labels indicating planner, environment, and per-decision budget",
                     "5. Use consistent naming conventions for saved files",
                 ]
             )
@@ -833,19 +746,19 @@ class MinimalAgent:
         return code
 
     def _determine_datasets_successfully_tested(self, node: Node) -> List[str]:
-        """Determine which datasets are successfully tested based on VLM feedback"""
+        """Determine which planning environments are successfully tested based on VLM feedback."""
         plot_analyses = ""
         for i, plot_analysis in enumerate(node.plot_analyses):
             plot_analyses += f"plot {i+1}: {plot_analysis['analysis']}\n"
 
         determine_prompt = {
-            "Introduction": "You are an AI researcher analyzing experiment results. Based on the plot analyses and feedback, determine which datasets are successfully tested. Return reasoning and the dataset names that are successfully executed, or an empty string if no datasets are successfully executed.",
+            "Introduction": "You are an AI researcher analyzing MCTS planning experiment results. Based on the plot analyses and feedback, determine which planning environments are successfully tested. Return reasoning and the environment names that are successfully executed, or an empty string if no environments are successfully executed. Use the marker SUCCESSFULLY_TESTED_DATASETS for compatibility.",
             "Plot analyses": plot_analyses,
             "VLM feedback summary": node.vlm_feedback_summary,
             "Original plotting code": node.plot_code,
             "Response format": (
                 "Your response should start with 'REASONING: <reasoning>' to think about the plot analysis and feedback in the first line."
-                "In the second line, you should have a list of dataset names that are successfully executed, starting with 'SUCCESSFULLY_TESTED_DATASETS: <list_datasets_successfully_tested>', "
+                "In the second line, you should have a list of environment names that are successfully executed, starting with 'SUCCESSFULLY_TESTED_DATASETS: <list_environments_successfully_tested>', "
             ),
         }
 
@@ -917,9 +830,9 @@ class MinimalAgent:
             prompt_select_plots = {
                 "Introduction": (
                     "You are an experienced AI researcher analyzing experimental results. "
-                    "You have been provided with plots from a machine learning experiment. "
+                    "You have been provided with plots from an MCTS planning experiment. "
                     "Please select 10 most relevant plots to analyze. "
-                    "For similar plots (e.g. generated samples at each epoch), select only at most 5 plots at a suitable interval of epochs."
+                    "Prioritize planner comparisons, budget-sensitivity curves, environment-wise robustness plots, and ablation summaries."
                     "Format your response as a list of plot paths, where each plot path includes the full path to the plot file."
                 ),
                 "Plot paths": node.plot_paths,
@@ -985,7 +898,7 @@ class MinimalAgent:
                 "type": "text",
                 "text": (
                     "You are an experienced AI researcher analyzing experimental results. "
-                    "You have been provided with plots from a machine learning experiment. "
+                    "You have been provided with plots from an MCTS planning experiment. "
                     f"This experiment is based on the following research idea: {self.task_desc}"
                     "Please analyze these plots and provide detailed insights about the results. "
                     "If you don't receive any plots, say 'No plots received'. "
@@ -1187,7 +1100,7 @@ class ParallelAgent:
         self._ablation_state = {  # store ablation names
             "completed_ablations": set(),
         }
-        self._hyperparam_tuning_state = {  # store hyperparam tuning ideas
+        self._hyperparam_tuning_state = {  # store Stage 2 MCTS variant ideas
             "tried_hyperparams": set(),
         }
 
@@ -1201,8 +1114,8 @@ class ParallelAgent:
             ),
             "Research idea": self.task_desc,
             "Instructions": [
-                "Propose a single evaluation metric that would be useful for analyzing the performance of solutions for this research task.",
-                "Note: Validation loss will be tracked separately so you don't need to include it in your response.",
+                "Propose a single primary evaluation metric that would be useful for comparing planning methods for this MCTS research task.",
+                "Prefer a metric such as mean score, regret to the best observed solution, optimality gap where exact solvers are available, or improvement over unchanged vanilla UCT/MCTS.",
                 "Format your response as a list containing:",
                 "- name: The name of the metric",
                 "- maximize: Whether higher values are better (true/false)",
@@ -1283,7 +1196,7 @@ class ParallelAgent:
 
             # Add seed to node code
             node_data["code"] = (
-                f"# Set random seed\nimport random\nimport numpy as np\nimport torch\n\nseed = {seed}\nrandom.seed(seed)\nnp.random.seed(seed)\ntorch.manual_seed(seed)\nif torch.cuda.is_available():\n    torch.cuda.manual_seed(seed)\n\n"
+                f"# Set random seed\nimport random\nimport numpy as np\n\nseed = {seed}\nrandom.seed(seed)\nnp.random.seed(seed)\n\n"
                 + node_code
             )
 
@@ -1563,10 +1476,10 @@ class ParallelAgent:
                         "Instructions": [
                             "0. Make sure to get the working directory from os.path.join(os.getcwd(), 'working')",
                             "1. Load the experiment_data.npy file, which is located in the working directory",
-                            "2. Extract metrics for each dataset. Make sure to refer to the original code to understand the structure of the data.",
-                            "3. Always print the name of the dataset before printing the metrics",
-                            "4. Always print the name of the metric before printing the value by specifying the metric name clearly. Avoid vague terms like 'train,' 'val,' or 'test.' Instead, use precise labels such as 'train accuracy,' 'validation loss,' or 'test F1 score,' etc.",
-                            "5. You only need to print the best or final value for each metric for each dataset",
+                            "2. Extract metrics for each planning environment, planner, and fixed per-decision budget. Make sure to refer to the original code to understand the structure of the data.",
+                            "3. Always print the environment name, planner name, and budget before printing the metrics when available",
+                            "4. Always print the name of the metric before printing the value by specifying the metric name clearly. Prefer labels such as 'mean score,' 'regret to best observed,' 'optimality gap,' or 'improvement over vanilla UCT.'",
+                            "5. You only need to print the best or final value for each metric for each environment/planner/budget group",
                             "6. DO NOT CREATE ANY PLOTS",
                             "Important code structure requirements:",
                             "  - Do NOT put any execution code inside 'if __name__ == \"__main__\":' block. Do not use 'if __name__ == \"__main__\":' at all.",
@@ -1606,7 +1519,7 @@ class ParallelAgent:
                     if metrics_exec_result.exc_type is None:
                         # Extract metrics from the execution output
                         metrics_prompt = {
-                            "Introduction": "Parse the metrics from the execution output. You only need the final or best value of a metric for each dataset, not the entire list during training.",
+                            "Introduction": "Parse the metrics from the execution output. You only need final or best planning metrics for each environment, planner, and fixed per-decision budget. Prefer score, regret_to_best_observed, optimality_gap, and any summary comparing proposed_mcts to unchanged vanilla_uct_mcts.",
                             "Execution Output": metrics_exec_result.term_out,
                         }
                         print(
@@ -1796,33 +1709,39 @@ class ParallelAgent:
             raise
 
     def _generate_hyperparam_tuning_idea(self) -> Optional[HyperparamTuningIdea]:
-        """Generate the next hyperparam tuning idea based on what's been done.
-        This is minaly for Stage 2 (baseline tuning).
+        """Generate the next Stage 2 MCTS variant idea based on what's been done.
+
+        The legacy name is kept because Stage 2 plumbing stores these ideas in
+        the existing HyperparamTuningIdea container.
         """
         tried = list(self._hyperparam_tuning_state["tried_hyperparams"])
 
         hyperparam_tuning_prompt = {
             "Introduction": (
-                "You are an AI researcher conducting hyperparameter tuning for baseline experiments. "
-                "Based on the current implementation and previous hyperparameter tuning attempts (if any), "
-                "propose ONE new hyperparameter tuning idea to see if it improves the performance."
-                "You should first check if simply training longer (more epochs) improves the performance."
-                "Then try tuning common hyperparameters such as learning rate, batch size, etc."
-                "Only propose algorithm-specific and/or model-specific hyperparameters after you have tried the above."
+                "You are an AI researcher generating named MCTS variant candidates for a fixed benchmark. "
+                "Based on the current benchmark implementation and previous MCTS variant attempts, "
+                "propose ONE new MCTS mechanism to improve planning quality under fixed per-decision simulation budgets. "
+                "Keep this as a lightweight MCTS/planning experiment on the provided synthetic benchmark. "
+                "The mechanism must modify proposed-only MCTS components such as selection, rollout, backup, expansion, action choice, or simulation allocation. "
+                "Do not propose changes to vanilla UCT/MCTS baseline functions, environment constants, random seeds, evaluation budgets, metrics, or only the UCT exploration constant."
             ),
             "Base code you are working on": wrap_code(self.best_stage1_node.code),
-            "Previous Hyperparam Tuning Attempts": {
+            "Previous MCTS Variant Attempts": {
                 "Has been tried": tried if tried else "Nothing has been tried yet.",
             },
             "Instructions": {
                 "Requirements": [
-                    "1. Identify ONE specific hyperparameter to tune",
-                    "2. Ensure the hyperparameter is different from previous attempts",
+                    "1. Identify ONE named MCTS mechanism to test",
+                    "2. Ensure the mechanism is different from previous attempts",
+                    "3. Specify whether it changes selection, rollout, backup, expansion, action choice, or simulation allocation",
+                    "4. The mechanism must be expressible as a clear rule, formula, or pseudocode",
+                    "5. It must preserve unchanged vanilla UCT/MCTS as a baseline",
+                    "6. Changing only the UCT exploration constant is invalid",
                 ]
             },
             "Response format": (
-                "Your response should start with 'HYPERPARAM NAME: <hyperparam name>' on the first line to represent the name of the hyperparameter."
-                "The second line should start with 'DESCRIPTION: <description>', a brief description of what hyperparameter is being tuned and why (3-5 sentences). "
+                "Your response should start with 'HYPERPARAM NAME: <MCTS variant name>' on the first line. "
+                "The second line should start with 'DESCRIPTION: <description>', a brief description of the proposed MCTS mechanism, what component it changes, and why it may improve fixed-budget planning (3-5 sentences). "
             ),
         }
 
@@ -1851,23 +1770,23 @@ class ParallelAgent:
             )
 
         logger.error(
-            f"Failed to parse hyperparam tuning response after {retry_limit} retries. Falling back to default idea of increasing learning rate."
+            f"Failed to parse Stage 2 MCTS variant response after {retry_limit} retries. Falling back to a conservative proposed rollout variant."
         )
         return HyperparamTuningIdea(
-            name="increase learning rate", description="increase learning rate"
+            name="proposed rollout variant",
+            description="Modify only proposed_rollout with a named rule while preserving unchanged vanilla UCT/MCTS as the baseline.",
         )
 
     def _generate_ablation_idea(self) -> Optional[AblationIdea]:
-        """Generate the next ablation idea based on what's been done"""
+        """Generate the next MCTS ablation or budget-sensitivity idea."""
 
         # Prepare context of what's been tried
         completed = list(self._ablation_state["completed_ablations"])
 
         ablation_prompt = {
             "Introduction": (
-                "You are an AI researcher conducting ablation studies. "
-                "Based on the current implementation and previous ablations (if any), "
-                "propose ONE new ablation study that tests a different aspect of the model."
+                "You are an AI researcher conducting ablations and budget-sensitivity analysis for a proposed MCTS variant. "
+                "Based on the current implementation and previous ablations, propose ONE new study that tests which proposed component matters or whether the improvement is robust across fixed per-decision budgets."
             ),
             "Base code you are working on": wrap_code(self.best_stage3_node.code),
             "Previous Ablations": {
@@ -1877,15 +1796,17 @@ class ParallelAgent:
             },
             "Instructions": {
                 "Requirements": [
-                    "1. Identify ONE specific component/feature to ablate",
+                    "1. Identify ONE specific proposed MCTS component or budget-sensitivity question to ablate",
                     "2. Ensure the ablation is different from previous completed or running attempts",
-                    "3. The ablation should be a new idea, not a variation of previous ideas",
-                    "4. If you have only used a single synthetic dataset throughout the experiment, one of your ablations should be to use multiple synthetic datasets (at least 3 different datasets)",
+                    "3. The ablation should isolate selection, rollout, backup, expansion, action choice, or simulation allocation when possible",
+                    "4. Compare against unchanged vanilla UCT/MCTS under the same fixed per-decision budgets",
+                    "5. Do not modify vanilla UCT/MCTS baseline functions",
+                    "6. Do not modify environments, environment constants, seeds, metrics, scenario counts, or budget values to make the method look better",
                 ]
             },
             "Response format": (
                 "Your response should start with 'ABLATION NAME: <ablation name>' on the first line to represent the name of the ablation."
-                "The second line should start with 'ABLATION DESCRIPTION: <description>', a brief description of what component is being ablated and why (3-5 sentences), "
+                "The second line should start with 'ABLATION DESCRIPTION: <description>', a brief description of what proposed MCTS component or budget-sensitivity question is being tested and why (3-5 sentences), "
             ),
         }
 
@@ -1914,9 +1835,12 @@ class ParallelAgent:
             )
 
         logger.error(
-            f"Failed to parse ablation response after {retry_limit} retries. Falling back to default idea of removing dropout."
+            f"Failed to parse ablation response after {retry_limit} retries. Falling back to a proposed-component ablation."
         )
-        return AblationIdea(name="add one more layer", description="add one more layer")
+        return AblationIdea(
+            name="remove proposed rollout change",
+            description="Ablate the proposed rollout component while preserving the other proposed components and comparing against unchanged vanilla UCT/MCTS.",
+        )
 
     def _get_leaves(self, node: Node) -> List[Node]:
         """Get all leaf nodes in the subtree rooted at node."""
@@ -1934,7 +1858,7 @@ class ParallelAgent:
         Note:
         - This function runs in the main process.
         Some design considerations:
-        - For Stage 2 and 4, we generate nodes in the main process and
+        - For Stage 2 and 4, we generate MCTS candidate/ablation nodes in the main process and
         send them to worker processes.
         This is to make sure we don't run duplicate ideas in parallel.
         - For Stage 1 and 3, we generate nodes in worker processes.
@@ -2003,13 +1927,13 @@ class ParallelAgent:
                         processed_trees.add(tree_id)
                         continue
 
-            # Special handling for Stage 4 (Ablation Studies)
+            # Special handling for Stage 4 (MCTS ablation and budget analysis)
             print(f"[red]self.stage_name: {self.stage_name}[/red]")
             # print(f"[red]self.best_stage3_node: {self.best_stage3_node}[/red]")
             if self.stage_name and self.stage_name.startswith("4_"):
                 nodes_to_process.append(self.best_stage3_node)
                 continue
-            # Special handling for Stage 2 (Hyperparam tuning for baseline)
+            # Special handling for Stage 2 (named MCTS variant candidates)
             elif self.stage_name and self.stage_name.startswith("2_"):
                 nodes_to_process.append(self.best_stage1_node)
                 continue
@@ -2071,9 +1995,9 @@ class ParallelAgent:
 
         if self.cfg.agent.get("summary", None) is not None:
             memory_summary = self.journal.generate_summary(
-                include_code=False, 
+                include_code=False,
                 **{
-                    "model": self.cfg.agent.summary.model, 
+                    "model": self.cfg.agent.summary.model,
                     "temp": self.cfg.agent.summary.temp
                 }
             )
@@ -2160,7 +2084,7 @@ class ParallelAgent:
                 result_node = Node.from_dict(result_data, self.journal)
                 print("[red]Investigating if result node has metric[/red]", flush=True)
                 print(result_node.metric)
-                # Update hyperparam tuning state if in Stage 2
+                # Update Stage 2 candidate state if in Stage 2
                 self._update_hyperparam_tuning_state(result_node)
                 # Update ablation state if in Stage 4
                 self._update_ablation_state(result_node)
@@ -2190,22 +2114,22 @@ class ParallelAgent:
                     logger.info(f"Released GPU for process {process_id}")
 
     def _update_hyperparam_tuning_state(self, result_node: Node):
-        """Update hyperparam tuning tracking state based on execution results."""
+        """Update Stage 2 MCTS candidate tracking state based on execution results."""
         if not self.stage_name or not self.stage_name.startswith("2_"):
             return
 
         hyperparam_name = result_node.hyperparam_name
         if hyperparam_name is None:
             print(
-                f"[red]hyperparam_name is None for result_node: {result_node.id}[/red]"
+                f"[red]Stage 2 MCTS variant name is None for result_node: {result_node.id}[/red]"
             )
             return
 
         if not result_node.is_buggy:
             self._hyperparam_tuning_state["tried_hyperparams"].add(hyperparam_name)
-            logger.info(f"Hyperparam tuning {hyperparam_name} ran successfully")
+            logger.info(f"MCTS variant {hyperparam_name} ran successfully")
         else:
-            logger.warning(f"Hyperparam tuning {hyperparam_name} failed")
+            logger.warning(f"MCTS variant {hyperparam_name} failed")
 
     def _update_ablation_state(self, result_node: Node):
         """Update ablation tracking state based on execution results.
@@ -2245,17 +2169,17 @@ class ParallelAgent:
             "  import numpy as np",
             "  import os",
             "  working_dir = os.path.join(os.getcwd(), 'working')",
-            "Create standard visualizations of experiment results",
+            "Create standard visualizations of MCTS planning experiment results",
             "Save all plots to working_dir",
-            "Include training/validation curves if available",
+            "Include budget-sensitivity curves, environment-wise planner comparisons, ablation comparisons, and mean/error-bar summaries if available",
             "ONLY plot data that exists in experiment_data.npy - DO NOT make up or simulate any values",
             "Use basic matplotlib without custom styles",
             "Each plot should be in a separate try-except block",
             "Always close figures after saving",
-            "Always include a title for each plot, and be sure to use clear subtitles—such as 'Left: Ground Truth, Right: Generated Samples'—while also specifying the type of dataset being used.",
-            "Make sure to use descriptive names for figures when saving e.g. always include the dataset name and the type of plot in the name",
-            "When there are many similar figures to plot (e.g. generated samples at each epoch), make sure to plot only at a suitable interval of epochs so that you only plot at most 5 figures.",
-            "Example to extract data from experiment_data: experiment_data['dataset_name_1']['metrics']['train']",
+            "Always include a title for each plot and label the planner, environment, and per-decision budget clearly.",
+            "Make sure to use descriptive names for figures when saving, e.g. include the environment name, planner comparison, budget curve, or ablation name.",
+            "When there are many similar plots, keep only the most informative aggregate comparisons.",
+            "Example data may contain keys such as planner, environment, per_decision_budget, score, regret_to_best_observed, and optimality_gap.",
             "Make sure to add legend for standard error bars and means if applicable",
         ]
         prompt_guideline += [

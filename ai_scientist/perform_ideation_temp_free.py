@@ -125,6 +125,34 @@ Results from your last action (if any):
 """
 
 
+def parse_action_blocks(response_text: str) -> List[Dict[str, str]]:
+    pattern = re.compile(
+        r"ACTION:\s*(.*?)\s*ARGUMENTS:\s*(.*?)(?=\nACTION:|\Z)",
+        re.DOTALL | re.IGNORECASE,
+    )
+    blocks = []
+    for match in pattern.finditer(response_text):
+        action = match.group(1).strip()
+        arguments_text = match.group(2).strip()
+        if arguments_text.startswith("```json"):
+            json_match = re.search(
+                r"```json\s*(.*?)\s*```", arguments_text, re.DOTALL
+            )
+            if json_match:
+                arguments_text = json_match.group(1).strip()
+        blocks.append({"action": action, "arguments": arguments_text})
+    return blocks
+
+
+def choose_action_block(blocks: List[Dict[str, str]]) -> Dict[str, str]:
+    for block in reversed(blocks):
+        if block["action"] == "FinalizeIdea":
+            if len(blocks) > 1:
+                print("Multiple actions found; using the final FinalizeIdea block.")
+            return block
+    return blocks[0]
+
+
 def generate_temp_free_idea(
     idea_fname: str,
     client: Any,
@@ -180,30 +208,15 @@ def generate_temp_free_idea(
 
                 # Parse the LLM's response
                 try:
-                    # Use regular expressions to extract the components
-                    action_pattern = r"ACTION:\s*(.*?)\s*ARGUMENTS:"
-                    arguments_pattern = r"ARGUMENTS:\s*(.*?)(?:$|\nTHOUGHT:|\n$)"
-
-                    action_match = re.search(
-                        action_pattern, response_text, re.DOTALL | re.IGNORECASE
-                    )
-                    arguments_match = re.search(
-                        arguments_pattern, response_text, re.DOTALL | re.IGNORECASE
-                    )
-
-                    if not all([action_match, arguments_match]):
+                    blocks = parse_action_blocks(response_text)
+                    if not blocks:
                         raise ValueError("Failed to parse the LLM response.")
 
-                    action = action_match.group(1).strip()
-                    arguments_text = arguments_match.group(1).strip()
+                    block = choose_action_block(blocks)
+                    action = block["action"]
+                    arguments_text = block["arguments"]
                     print(f"Action: {action}")
                     print(f"Arguments: {arguments_text}")
-
-                    # If arguments are wrapped in ```json blocks, extract the content
-                    if arguments_text.startswith("```json"):
-                        arguments_text = re.search(
-                            r"```json\s*(.*?)\s*```", arguments_text, re.DOTALL
-                        ).group(1)
 
                     # Process the action and arguments
                     if action in tools_dict:
@@ -273,7 +286,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o-2024-05-13",
+        default="gpt-5.4", #Changed
         choices=AVAILABLE_LLMS,
         help="Model to use for AI Scientist.",
     )
