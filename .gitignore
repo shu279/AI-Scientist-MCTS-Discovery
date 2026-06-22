@@ -173,7 +173,6 @@ data/
 *.zip
 templates/*/run_0/
 templates/*/*.png
-results/
 # logs/
 
 # data folders under review_iclr_bench/

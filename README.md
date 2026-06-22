@@ -1,40 +1,43 @@
-# AI Scientist for MCTS: Discovering Budget-Efficient Planning Variants
+# AI Scientist-v2 for Discovering Budget-Efficient MCTS Variants
 
 This repository adapts the AI Scientist-v2 for
 algorithm discovery in Monte Carlo Tree Search (MCTS).
 
 The goal is to test whether an automated research agent can discover
 budget-efficient MCTS variants for small synthetic planning tasks by modifying
-selection, rollout, backup, expansion, or action choice. The benchmark is
-intentionally lightweight and synthetic for fast algorithmic iteration.
+selection, rollout, backup, expansion, or action choice. 
+
+<div align="center">
+  <a href="image.png">
+    <img src="image.png" width="400" alt="AI Scientist MCTS Discovery Logo" />
+  </a>
+</div>
 
 ## What This Fork Changes
 
 This fork repurposes the original AI Scientist-v2 workflow from
-deep-learning-centric experimentation to MCTS algorithm discovery.
+deep-learning experimentation to MCTS algorithm discovery.
 
-- Added MCTS discovery topic prompt: `ai_scientist/ideas/mcts_discovery.md`
-- Added runnable planning benchmark: `ai_scientist/ideas/mcts_discovery.py`
-- Added launchable seed idea: `ai_scientist/ideas/mcts_discovery.json`
-- Adapted tree-search process for MCTS:
+- Added MCTS topic prompt: `ai_scientist/ideas/mcts_discovery.md`
+- Added planning benchmark: `ai_scientist/ideas/mcts_discovery.py`
+- Added seed code: `ai_scientist/ideas/mcts_discovery.json`
+- Adapted agentic tree-search for MCTS:
   `ai_scientist/treesearch/agent_manager.py`
-- Adapted parallel agent prompts to preserve the vanilla UCT/MCTS baseline:
+- Adapted parallel agent prompts to preserve the vanilla MCTS baseline:
   `ai_scientist/treesearch/parallel_agent.py`
 - Adapted reviewer criteria for baseline integrity, named mechanism validity,
   and fair fixed-budget comparison: `ai_scientist/perform_llm_review.py`
-- Removed dataset reference injection: `launch_scientist_bfts.py`
-- Restricted the LLM/VLM model configuration to recent OpenAI-style model
-  aliases (`gpt-5.4` / `gpt-5.5`)
+- Restricted the LLM/VLM model configuration to recent OpenAI models (`gpt-5.4` / `gpt-5.5`)
 
 ## Benchmark
 
 The seed code provides three deterministic synthetic planning environments:
 
-- Grid reward collection
+- Reward collection
 - Graph orienteering
-- Deadline-based task scheduling
+- Task scheduling
 
-It includes these baseline planners:
+It includes following baseline planners:
 
 - Random planning
 - Greedy planning
@@ -56,14 +59,12 @@ Generated benchmark outputs include:
 - `working/summary.json`
 - `working/policy_metrics.csv`
 - `working/scenario_metrics.csv`
-- Optional mean-score plots when pandas and matplotlib are available
 
-## Contributions
+## Contribution of AI Scientist
 
-AI Scientist should propose a named MCTS mechanism with a clear rule, formula,
-or pseudocode.
+AI Scientist should propose a named mechanism with a clear formula or pseudocode.
 
-Allowed modification targets:
+The mechanism should be implemented only through extension points:
 
 - `proposed_select_child`
 - `proposed_rollout`
@@ -71,13 +72,11 @@ Allowed modification targets:
 - `proposed_mcts_choose_action`
 - Helper functions used only by `proposed_mcts`
 
-Invalid contributions:
+Invalid contributions include:
 
-- Modifying the vanilla UCT/MCTS baseline functions
-- Modifying random, greedy, or beam-search baselines
-- Changing environment constants, random seeds, metrics, scenario counts, or
+- Modifying random, greedy, beam-search, or vanilla UCT/MCTS baseline functions
+- Changing environment constants, seeds, metrics, or
   fixed per-decision budgets to make results look better
-- Only tuning the UCT exploration constant
 - Reporting a method without a named mechanism or clear rule
 
 ## Installation

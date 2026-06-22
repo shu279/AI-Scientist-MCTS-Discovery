@@ -8,26 +8,48 @@ FunctionCallType = dict
 OutputType = str | FunctionCallType
 
 
-import backoff
 import logging
+import time
 from typing import Callable
 
 logger = logging.getLogger("ai-scientist")
 
 
-@backoff.on_predicate(
-    wait_gen=backoff.expo,
-    max_value=60,
-    factor=1.5,
-)
 def backoff_create(
     create_fn: Callable, retry_exceptions: list[Exception], *args, **kwargs
 ):
-    try:
-        return create_fn(*args, **kwargs)
-    except retry_exceptions as e:
-        logger.info(f"Backoff exception: {e}")
-        return False
+    max_tries = 3
+    max_time = 120.0
+    wait = 1.5
+    max_wait = 15.0
+    start_time = time.time()
+    target = getattr(create_fn, "__name__", repr(create_fn))
+
+    for tries in range(1, max_tries + 1):
+        try:
+            return create_fn(*args, **kwargs)
+        except retry_exceptions as e:
+            elapsed = time.time() - start_time
+            msg = (
+                f"[BACKOFF] target={target} tries={tries}/{max_tries} "
+                f"elapsed={elapsed:.1f}s exception={type(e).__name__}: {repr(e)}"
+            )
+            logger.warning(msg)
+            print(msg, flush=True)
+
+            if tries >= max_tries or elapsed >= max_time:
+                giveup_msg = (
+                    f"[BACKOFF GIVEUP] target={target} tries={tries}/{max_tries} "
+                    f"elapsed={elapsed:.1f}s exception={type(e).__name__}: {repr(e)}"
+                )
+                logger.error(giveup_msg)
+                print(giveup_msg, flush=True)
+                raise
+
+            remaining = max_time - elapsed
+            sleep_time = min(wait, max_wait, max(0.0, remaining))
+            time.sleep(sleep_time)
+            wait = min(wait * 2.0, max_wait)
 
 
 def opt_messages_to_list(

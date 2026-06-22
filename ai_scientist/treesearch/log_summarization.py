@@ -333,10 +333,10 @@ def overall_summarize(journals, cfg=None):
                     ),
                 }
         elif idx == 3:
-            good_leaf_nodes = [
-                n for n in journal.good_nodes if n.is_leaf and n.ablation_name
+            good_ablation_nodes = [
+                n for n in journal.good_nodes if n.ablation_name
             ]
-            return [get_node_log(n) for n in good_leaf_nodes]
+            return [get_node_log(n) for n in good_ablation_nodes]
         elif idx == 0:
             if cfg.agent.get("summary", None) is not None:
                 model = cfg.agent.summary.get("model", "")

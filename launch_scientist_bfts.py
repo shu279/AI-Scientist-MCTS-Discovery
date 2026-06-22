@@ -59,8 +59,14 @@ def parse_arguments():
     parser.add_argument(
         "--writeup-retries",
         type=int,
-        default=3,
+        default=2,
         help="Number of writeup attempts to try",
+    )
+    parser.add_argument(
+        "--writeup-reflections",
+        type=int,
+        default=1,
+        help="Number of writeup reflection passes to run",
     )
     parser.add_argument(
         "--page-limit",
@@ -83,7 +89,7 @@ def parse_arguments():
     parser.add_argument(
         "--model_writeup",
         type=str,
-        default="gpt-5.5",
+        default="gpt-5.4",
         help="Model to use for writeup",
     )
     parser.add_argument(
@@ -95,7 +101,7 @@ def parse_arguments():
     parser.add_argument(
         "--num_cite_rounds",
         type=int,
-        default=20,
+        default=10,
         help="Number of citation rounds to perform",
     )
     parser.add_argument(
@@ -256,6 +262,7 @@ if __name__ == "__main__":
                 small_model=args.model_writeup_small,
                 big_model=args.model_writeup,
                 page_limit=args.page_limit,
+                n_writeup_reflections=args.writeup_reflections,
                 citations_text=citations_text,
             )
             if writeup_success:

@@ -146,12 +146,24 @@ def collect_writeup_figures(base_folder):
     figures_dir = osp.join(base_folder, "figures")
     os.makedirs(figures_dir, exist_ok=True)
 
+    figure_exts = (".png", ".pdf")
+    existing_figures = sorted(
+        f for f in os.listdir(figures_dir) if f.lower().endswith(figure_exts)
+    )
+    if existing_figures:
+        preferred = [
+            f
+            for f in existing_figures
+            if f.lower().endswith(".pdf") and f.startswith("figure_")
+        ]
+        return figures_dir, (preferred or existing_figures)[:12]
+
     experiment_results_dir = osp.join(
         base_folder, "logs", "0-run", "experiment_results"
     )
     for root, _, files in os.walk(experiment_results_dir):
         for fname in files:
-            if not fname.lower().endswith(".png"):
+            if not fname.lower().endswith(figure_exts):
                 continue
             src = osp.join(root, fname)
             dst = osp.join(figures_dir, fname)
@@ -162,7 +174,7 @@ def collect_writeup_figures(base_folder):
                     pass
 
     return figures_dir, sorted(
-        f for f in os.listdir(figures_dir) if f.lower().endswith(".png")
+        f for f in os.listdir(figures_dir) if f.lower().endswith(figure_exts)
     )
 
 
@@ -502,9 +514,10 @@ def perform_writeup(
     no_writing=False,
     num_cite_rounds=20,
     small_model="gpt-5.4",
-    big_model="gpt-5.5",
+    big_model="gpt-5.4",
     n_writeup_reflections=3,
     page_limit=8,
+    citations_text=None,
 ):
     compile_attempt = 0
     base_pdf_file = osp.join(base_folder, f"{osp.basename(base_folder)}")
@@ -562,6 +575,16 @@ def perform_writeup(
         writeup_file = osp.join(latex_folder, "template.tex")
         with open(writeup_file, "r") as f:
             writeup_text = f.read()
+
+        if citations_text:
+            writeup_text = re.sub(
+                r"(\\begin{filecontents}{references.bib})(.*?)(\\end{filecontents})",
+                lambda match: f"{match.group(1)}\n{citations_text.strip()}\n{match.group(3)}",
+                writeup_text,
+                flags=re.DOTALL,
+            )
+            with open(writeup_file, "w") as f:
+                f.write(writeup_text)
 
         # Gather plot filenames, copying generated experiment plots into figures/.
         figures_dir, plot_names = collect_writeup_figures(base_folder)
@@ -807,7 +830,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--big-model",
         type=str,
-        default="gpt-5.5",
+        default="gpt-5.4",
         choices=AVAILABLE_LLMS,
         help="Model to use for final writeup (big model).",
     )

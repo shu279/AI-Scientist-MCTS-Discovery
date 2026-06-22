@@ -54,6 +54,8 @@ AVAILABLE_LLMS = [
         openai.InternalServerError,
         anthropic.RateLimitError,
     ),
+    max_time=120,
+    max_tries=3,
 )
 @track_token_usage
 def get_batch_responses_from_llm(
@@ -235,6 +237,8 @@ def make_llm_call(client, model, temperature, system_message, prompt):
         openai.InternalServerError,
         anthropic.RateLimitError,
     ),
+    max_time=120,
+    max_tries=3,
 )
 def get_response_from_llm(
     prompt,
